@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 405 453">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: url(#radial-gradient);
+      }
+
+      .cls-2 {
+        fill: #18345e;
+      }
+
+      .cls-3 {
+        fill: none;
+        stroke: #fff;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 26px;
+      }
+    </style>
+    <radialGradient id="radial-gradient" cx="203" cy="233" fx="203" fy="233" r="50.99" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#91d6e6"/>
+      <stop offset=".44" stop-color="#92d6e6"/>
+      <stop offset=".6" stop-color="#99d9e7"/>
+      <stop offset=".71" stop-color="#a5ddea"/>
+      <stop offset=".8" stop-color="#b6e3ee"/>
+      <stop offset=".88" stop-color="#ccecf3"/>
+      <stop offset=".95" stop-color="#e6f6f9"/>
+      <stop offset="1" stop-color="#fff"/>
+    </radialGradient>
+  </defs>
+  <g id="Layer_1-2" data-name="Layer 1">
+    <g id="logo-icon">
+      <path id="hexagon" class="cls-2" d="M203,13c8,0,16,2.67,24,8l166,96c8,4.67,12,11.33,12,20v192c0,8.67-4,15.33-12,20l-166,96c-8,5.33-16,8-24,8s-16-2.67-24-8L13,349c-8-4.67-12-11.33-12-20v-192c0-8.67,4-15.33,12-20L179,21c8-5.33,16-8,24-8h0Z"/>
+      <path id="line-top" class="cls-3" d="M203,13v214V13h0Z"/>
+      <path id="line-left" class="cls-3" d="M13,349l190-113.54L13,349Z"/>
+      <g id="orb">
+        <rect class="cls-3" x="203" y="196.37" height="30.86"/>
+        <circle class="cls-1" cx="203" cy="233" r="50.99"/>
+      </g>
+    </g>
+  </g>
+</svg>

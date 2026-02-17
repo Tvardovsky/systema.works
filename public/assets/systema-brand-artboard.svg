@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1600 1200">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: url(#radial-gradient);
+      }
+
+      .cls-2, .cls-3 {
+        fill: #18345e;
+      }
+
+      .cls-4, .cls-3 {
+        isolation: isolate;
+      }
+
+      .cls-3 {
+        font-family: CalSans-Regular, 'Cal Sans';
+        font-size: 140px;
+      }
+
+      .cls-5 {
+        fill: none;
+        stroke: #fff;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 26px;
+      }
+
+      .cls-6 {
+        letter-spacing: -.01em;
+      }
+
+      .cls-7 {
+        letter-spacing: -.03em;
+      }
+
+      .cls-8 {
+        letter-spacing: -.01em;
+      }
+
+      .cls-9 {
+        letter-spacing: 0em;
+      }
+    </style>
+    <radialGradient id="radial-gradient" cx="1144.42" cy="293.81" fx="1144.42" fy="293.81" r="1.54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#91d6e6"/>
+      <stop offset="1" stop-color="#92d6e6"/>
+    </radialGradient>
+  </defs>
+  <g id="logo-icon">
+    <g>
+      <path class="cls-2" d="M990,420.61l-166-96c-3.67-2.44-7.33-4.32-11-5.64v211.64c0,1.48-.26,2.89-.71,4.21.48,1.38.71,2.81.71,4.23,0,4.43-2.26,8.74-6.33,11.17l-183.79,109.83,153.12,88.55c8,5.33,16,8,24,8s16-2.67,24-8l166-96c8-4.67,12-11.33,12-20v-192c0-8.67-4-15.33-12-20Z"/>
+      <path class="cls-2" d="M603.33,641.45l183.72-109.79c-.03-.35-.05-.7-.05-1.05v-211.64c-3.67,1.32-7.33,3.2-11,5.64l-166,96c-8,4.67-12,11.33-12,20v192c0,4.09.9,7.73,2.69,10.93.77-.79,1.65-1.5,2.64-2.09Z"/>
+    </g>
+    <g id="orb">
+      <rect class="cls-5" x="800" y="499.98" height="30.86"/>
+      <circle class="cls-1" cx="800" cy="536.61" r="50.99"/>
+    </g>
+  </g>
+  <g id="logo-text">
+    <g class="cls-4">
+      <text class="cls-3" transform="translate(498.51 883.39)"><tspan class="cls-8" x="0" y="0">s</tspan><tspan class="cls-7" x="58.94" y="0">y</tspan><tspan class="cls-9" x="129.5" y="0">s</tspan><tspan class="cls-6" x="188.86" y="0">t</tspan><tspan x="232.82" y="0">ema_</tspan></text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,10 @@
+export function SocialLinks() {
+  return (
+    <nav className="social" aria-label="Contact Us">
+      <a href="https://www.facebook.com/systemaworksagency" target="_blank" rel="noopener noreferrer" aria-label="Facebook"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.88 3.77-3.88 1.09 0 2.23.2 2.23.2v2.46h-1.26c-1.24 0-1.62.77-1.62 1.56V12h2.76l-.44 2.89h-2.32v6.99A10 10 0 0 0 22 12z"/></svg></a>
+      <a href="https://www.instagram.com/systema.works" target="_blank" rel="noopener noreferrer" aria-label="Instagram"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10a5 5 0 0 1 5 5v10a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5V7a5 5 0 0 1 5-5zm10 2H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3z"/><path d="M12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/><path d="M17.5 6.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg></a>
+      <a href="https://t.me/systema_works_channel" target="_blank" rel="noopener noreferrer" aria-label="Telegram"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.4 15.5 9.2 19c.4 0 .6-.2.9-.4l2.2-2.1 4.6 3.4c.8.4 1.4.2 1.6-.8l2.9-13.6c.3-1.2-.5-1.7-1.3-1.4L2.8 9.3c-1.1.4-1.1 1.1-.2 1.4l4.4 1.4L17.4 6.6c.5-.3 1-.1.6.2L9.4 15.5z"/></svg></a>
+      <a href="https://wa.me/38268291324" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.04 2a9.94 9.94 0 0 0-8.6 14.95L2 22l5.2-1.37A9.96 9.96 0 1 0 12.04 2zm0 18.2c-1.5 0-2.95-.4-4.23-1.15l-.3-.18-3.09.81.83-3.01-.2-.31A8.2 8.2 0 1 1 12.04 20.2zm4.77-6.13c-.26-.13-1.54-.76-1.78-.85-.24-.09-.41-.13-.59.13-.18.26-.67.85-.82 1.02-.15.18-.3.2-.56.07-.26-.13-1.1-.4-2.1-1.28-.78-.7-1.3-1.56-1.45-1.82-.15-.26-.02-.4.11-.53.12-.12.26-.3.39-.45.13-.15.18-.26.26-.43.09-.18.04-.33-.02-.45-.07-.13-.59-1.43-.81-1.95-.21-.5-.42-.43-.59-.43h-.5c-.18 0-.45.07-.69.33-.24.26-.9.88-.9 2.15s.92 2.49 1.05 2.66c.13.18 1.8 2.74 4.36 3.84.61.26 1.08.41 1.45.53.61.2 1.17.17 1.61.1.49-.08 1.54-.63 1.75-1.24.22-.61.22-1.13.15-1.24-.07-.11-.24-.18-.5-.31z"/></svg></a>
+    </nav>
+  );
+}
