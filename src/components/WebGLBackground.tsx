@@ -18,34 +18,47 @@ precision mediump float;
 uniform vec2 u_resolution;
 uniform float u_time;
 
-vec3 colorA = vec3(0.66, 0.90, 0.97);
-vec3 colorB = vec3(0.12, 0.28, 0.50);
-vec3 colorC = vec3(0.52, 0.80, 0.92);
+vec3 colorA = vec3(0.72, 0.92, 0.97);
+vec3 colorB = vec3(0.20, 0.36, 0.58);
+vec3 colorC = vec3(0.56, 0.84, 0.94);
 vec3 base = vec3(0.974, 0.987, 0.996);
 
 void main() {
   vec2 uv = gl_FragCoord.xy / u_resolution.xy;
   float aspect = u_resolution.x / max(u_resolution.y, 1.0);
 
-  vec2 p1 = vec2(0.18 + sin(u_time * 0.16) * 0.06, 0.24 + cos(u_time * 0.13) * 0.05);
-  vec2 p2 = vec2(0.80 + cos(u_time * 0.14) * 0.07, 0.72 + sin(u_time * 0.11) * 0.05);
-  vec2 p3 = vec2(0.58 + sin(u_time * 0.10 + 1.3) * 0.05, 0.36 + cos(u_time * 0.12 + 0.7) * 0.04);
+  // Autonomous magma-like drift (time-based only, scroll-independent).
+  uv.x += sin(uv.y * 6.0 + u_time * 0.22) * 0.0035;
+  uv.y += cos(uv.x * 5.0 + u_time * 0.16) * 0.0029;
+
+  vec2 p1 = vec2(
+    0.14 + sin(u_time * 0.18) * 0.065,
+    0.2 + cos(u_time * 0.14) * 0.05
+  );
+  vec2 p2 = vec2(
+    0.86 + cos(u_time * 0.15) * 0.07,
+    0.76 + sin(u_time * 0.12) * 0.05
+  );
+  vec2 p3 = vec2(
+    0.56 + sin(u_time * 0.11 + 1.3) * 0.055,
+    0.38 + cos(u_time * 0.14 + 0.7) * 0.045
+  );
 
   vec2 d1v = (uv - p1) * vec2(aspect, 1.0);
   vec2 d2v = (uv - p2) * vec2(aspect, 1.0);
   vec2 d3v = (uv - p3) * vec2(aspect, 1.0);
 
-  float f1 = exp(-dot(d1v, d1v) * 4.2);
-  float f2 = exp(-dot(d2v, d2v) * 3.8);
-  float f3 = exp(-dot(d3v, d3v) * 4.6);
+  float f1 = exp(-dot(d1v, d1v) * 2.7);
+  float f2 = exp(-dot(d2v, d2v) * 2.5);
+  float f3 = exp(-dot(d3v, d3v) * 2.9);
 
   float weight = f1 + f2 + f3 + 0.0001;
   vec3 field = (colorA * f1 + colorB * f2 + colorC * f3) / weight;
 
-  float influence = smoothstep(0.06, 0.84, clamp(weight * 0.66, 0.0, 1.0));
-  vec3 finalColor = mix(base, field, influence * 0.24);
+  float influence = smoothstep(0.06, 0.94, clamp(weight * 0.64, 0.0, 1.0));
+  vec3 finalColor = mix(base, field, influence * 0.22);
 
-  gl_FragColor = vec4(finalColor, 0.88);
+  gl_FragColor = vec4(finalColor, 1.0);
 }
 `;
 
@@ -137,7 +150,7 @@ export function WebGLBackground() {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const isMobile = window.matchMedia('(max-width: 980px)').matches;
     const pixelRatio = Math.min(window.devicePixelRatio || 1, isMobile ? 1.1 : 1.35);
-    const frameInterval = reduceMotion ? 1000 : 1000 / (isMobile ? 22 : 28);
+    const frameInterval = reduceMotion ? 1000 : 1000 / (isMobile ? 22 : 30);
 
     let raf = 0;
     let start = performance.now();
@@ -200,5 +213,10 @@ export function WebGLBackground() {
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="webgl-bg" aria-hidden="true" />;
+  return (
+    <>
+      <div className="webgl-fallback" aria-hidden="true" />
+      <canvas ref={canvasRef} className="webgl-bg" aria-hidden="true" />
+    </>
+  );
 }

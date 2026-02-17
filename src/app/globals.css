@@ -35,10 +35,7 @@ body {
   padding: 0;
   color: var(--ink);
   scroll-behavior: smooth;
-  background:
-    radial-gradient(55rem 30rem at 14% 20%, rgba(145, 214, 230, 0.24), transparent 58%),
-    radial-gradient(48rem 26rem at 88% 28%, rgba(24, 52, 94, 0.1), transparent 65%),
-    linear-gradient(180deg, #ffffff 0%, var(--surface) 100%);
+  background: #f8fcfe;
 }
 
 body {
@@ -48,7 +45,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-kerning: normal;
-  background: linear-gradient(180deg, #ffffff 0%, var(--surface) 100%);
+  background: #f8fcfe;
 }
 
 a {
@@ -75,6 +72,17 @@ a {
   display: block;
   opacity: 1;
   transform: translateZ(0);
+}
+
+.webgl-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: -4;
+  pointer-events: none;
+  background:
+    radial-gradient(64rem 34rem at 14% 18%, rgba(145, 214, 230, 0.1), transparent 70%),
+    radial-gradient(62rem 36rem at 84% 26%, rgba(24, 52, 94, 0.045), transparent 72%),
+    #f8fcfe;
 }
 
 body::before,
