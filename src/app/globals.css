@@ -112,16 +112,16 @@ body::after,
   align-items: center;
   padding: 0.78rem 1.05rem;
   margin-bottom: 1.85rem;
-  border: 1px solid rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.72);
   border-radius: 22px;
-  backdrop-filter: blur(20px) saturate(145%) contrast(108%) brightness(1.04);
-  -webkit-backdrop-filter: blur(20px) saturate(145%) contrast(108%) brightness(1.04);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0.26));
+  backdrop-filter: blur(22px) saturate(128%) contrast(114%) brightness(1.03);
+  -webkit-backdrop-filter: blur(22px) saturate(128%) contrast(114%) brightness(1.03);
+  background: rgba(255, 255, 255, 0.2);
+  will-change: backdrop-filter;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.76),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.4),
-    0 10px 24px rgba(24, 52, 94, 0.1);
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.18),
+    0 12px 28px rgba(24, 52, 94, 0.11);
 }
 
 .topbar::before,
@@ -135,21 +135,27 @@ body::after,
 
 .topbar::before {
   z-index: 0;
-  background:
-    linear-gradient(122deg, rgba(255, 255, 255, 0.68) 0%, rgba(255, 255, 255, 0.16) 40%, rgba(255, 255, 255, 0.52) 100%),
-    radial-gradient(120% 110% at 8% -12%, rgba(255, 255, 255, 0.42), transparent 56%);
-  mix-blend-mode: screen;
+  inset: -1px;
+  border-radius: 24px;
+  backdrop-filter: blur(36px) saturate(140%) contrast(122%) brightness(1.03);
+  -webkit-backdrop-filter: blur(36px) saturate(140%) contrast(122%) brightness(1.03);
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 0.96;
 }
 
 .topbar::after {
   z-index: 0;
-  background:
-    linear-gradient(95deg, rgba(145, 214, 230, 0.16), rgba(255, 255, 255, 0.04) 36%, rgba(24, 52, 94, 0.1) 68%, rgba(255, 255, 255, 0.16)),
-    radial-gradient(74% 132% at 2% 10%, rgba(255, 255, 255, 0.42), transparent 64%),
-    radial-gradient(88% 146% at 98% 108%, rgba(145, 214, 230, 0.18), transparent 68%);
-  backdrop-filter: blur(16px) saturate(150%) contrast(114%) brightness(1.06);
-  -webkit-backdrop-filter: blur(16px) saturate(150%) contrast(114%) brightness(1.06);
-  opacity: 0.92;
+  inset: 5px;
+  border-radius: 17px;
+  backdrop-filter: blur(1.35px) saturate(188%) contrast(152%) brightness(1.024);
+  -webkit-backdrop-filter: blur(1.35px) saturate(188%) contrast(152%) brightness(1.024);
+  background: rgba(255, 255, 255, 0.015);
+  mask-image:
+    radial-gradient(112% 124% at 12% -30%, #000 40%, transparent 100%),
+    radial-gradient(126% 128% at 90% 132%, #000 38%, transparent 100%),
+    linear-gradient(96deg, transparent 0%, #000 21%, #000 72%, transparent 100%),
+    repeating-linear-gradient(102deg, transparent 0 16px, #000 16px 20px, transparent 20px 42px);
+  opacity: 0.52;
 }
 
 .topbar > * {
@@ -193,6 +199,16 @@ body::after,
 .top-nav a:hover {
   border-color: var(--line);
   background: rgba(255, 255, 255, 0.76);
+}
+
+.top-nav a.is-active,
+.top-nav a[aria-current='true'] {
+  border-color: rgba(24, 52, 94, 0.24);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 4px 10px rgba(24, 52, 94, 0.08);
+  color: var(--brand-primary);
 }
 
 .language-switcher {
@@ -533,16 +549,22 @@ dotlottie-wc {
   box-shadow: var(--card-shadow);
 }
 
+.service-head {
+  display: flex;
+  align-items: center;
+  gap: 0.62rem;
+}
+
 .service-icon {
   width: 2rem;
   height: 2rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 0.42rem;
   border: 1px solid rgba(24, 52, 94, 0.14);
   border-radius: 999px;
   background: rgba(145, 214, 230, 0.18);
+  flex: 0 0 auto;
 }
 
 .service-icon-glyph {
@@ -558,7 +580,7 @@ dotlottie-wc {
 }
 
 .service-card p {
-  margin: 0.45rem 0 0;
+  margin: 0.56rem 0 0;
 }
 
 .split {
@@ -724,34 +746,51 @@ dotlottie-wc {
 .monte-preview {
   position: sticky;
   top: 5.2rem;
-  border: 1px solid rgba(24, 52, 94, 0.14);
-  border-radius: var(--card-radius);
-  padding: 1rem;
-  background: linear-gradient(180deg, rgba(245, 252, 255, 0.98), rgba(255, 255, 255, 0.95));
-  box-shadow: 0 8px 18px rgba(24, 52, 94, 0.05);
+  padding: 0.1rem 0.1rem 0.3rem;
+  background: transparent;
+  box-shadow: none;
 }
 
 .monte-preview p {
   margin-top: 0.55rem;
 }
 
-.monte-preview-tags {
-  margin-top: 0.7rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
+.monte-kicker {
+  margin: 0 0 0.48rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+  color: rgba(16, 32, 58, 0.64);
 }
 
-.monte-preview-tags span {
-  border: 1px solid rgba(24, 52, 94, 0.16);
+.monte-highlights {
+  margin: 0.68rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.monte-highlights li {
+  position: relative;
+  padding-left: 0.9rem;
+  font-size: 0.88rem;
+  color: rgba(16, 32, 58, 0.78);
+}
+
+.monte-highlights li::before {
+  content: '';
+  position: absolute;
+  top: 0.55em;
+  left: 0.08rem;
+  width: 5px;
+  height: 5px;
   border-radius: 999px;
-  padding: 0.28rem 0.58rem;
-  font-size: 0.76rem;
-  background: rgba(255, 255, 255, 0.88);
+  background: rgba(24, 52, 94, 0.44);
 }
 
 .monte-preview .btn-secondary {
-  margin-top: 0.82rem;
+  margin-top: 0.92rem;
 }
 
 .monte-grid {
@@ -1166,8 +1205,9 @@ dotlottie-wc {
     gap: 0.58rem;
     padding: 0.64rem 0.78rem;
     margin-bottom: 1.2rem;
-    backdrop-filter: blur(14px) saturate(128%) contrast(104%);
-    -webkit-backdrop-filter: blur(14px) saturate(128%) contrast(104%);
+    backdrop-filter: blur(18px) saturate(122%) contrast(108%) brightness(1.02);
+    -webkit-backdrop-filter: blur(18px) saturate(122%) contrast(108%) brightness(1.02);
+    background: rgba(255, 255, 255, 0.24);
   }
 
   .top-nav {
@@ -1386,7 +1426,7 @@ dotlottie-wc {
   }
 
   .case-points span,
-  .monte-preview-tags span {
+  .monte-highlights li {
     font-size: 0.78rem;
   }
 

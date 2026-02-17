@@ -8,6 +8,7 @@ import {ChatWidget} from '@/components/ChatWidget';
 import {WebGLBackground} from '@/components/WebGLBackground';
 import {MobileNav} from '@/components/MobileNav';
 import {LottieLoader} from '@/components/LottieLoader';
+import {DesktopNav} from '@/components/DesktopNav';
 
 type Props = {
   params: Promise<{locale: string}>;
@@ -28,12 +29,14 @@ export default async function HomePage({params}: Props) {
             <Image src="/assets/systema-wordmark.svg" alt="SYSTEMA logo" width={136} height={40} priority />
           </a>
 
-          <nav className="top-nav" aria-label="Primary">
-            <a href="#services">{t('navServices')}</a>
-            <a href="#cases">{t('navCases')}</a>
-            <a href="#process">{t('navProcess')}</a>
-            <a href="#contact">{t('navContact')}</a>
-          </nav>
+          <DesktopNav
+            links={[
+              {href: '#services', label: t('navServices')},
+              {href: '#cases', label: t('navCases')},
+              {href: '#process', label: t('navProcess')},
+              {href: '#contact', label: t('navContact')}
+            ]}
+          />
 
           <div className="topbar-tools">
             <LanguageSwitcher />
@@ -85,23 +88,31 @@ export default async function HomePage({params}: Props) {
 
           <div className="card-grid">
             <article className="service-card">
-              <div className="service-icon" aria-hidden><GlobeIcon className="service-icon-glyph" /></div>
-              <h3>{t('service1Title')}</h3>
+              <div className="service-head">
+                <div className="service-icon" aria-hidden><GlobeIcon className="service-icon-glyph" /></div>
+                <h3>{t('service1Title')}</h3>
+              </div>
               <p>{t('service1Body')}</p>
             </article>
             <article className="service-card">
-              <div className="service-icon" aria-hidden><GearIcon className="service-icon-glyph" /></div>
-              <h3>{t('service2Title')}</h3>
+              <div className="service-head">
+                <div className="service-icon" aria-hidden><GearIcon className="service-icon-glyph" /></div>
+                <h3>{t('service2Title')}</h3>
+              </div>
               <p>{t('service2Body')}</p>
             </article>
             <article className="service-card">
-              <div className="service-icon" aria-hidden><MobileIcon className="service-icon-glyph" /></div>
-              <h3>{t('service3Title')}</h3>
+              <div className="service-head">
+                <div className="service-icon" aria-hidden><MobileIcon className="service-icon-glyph" /></div>
+                <h3>{t('service3Title')}</h3>
+              </div>
               <p>{t('service3Body')}</p>
             </article>
             <article className="service-card">
-              <div className="service-icon" aria-hidden><RocketIcon className="service-icon-glyph" /></div>
-              <h3>{t('service4Title')}</h3>
+              <div className="service-head">
+                <div className="service-icon" aria-hidden><RocketIcon className="service-icon-glyph" /></div>
+                <h3>{t('service4Title')}</h3>
+              </div>
               <p>{t('service4Body')}</p>
             </article>
           </div>
@@ -168,14 +179,14 @@ export default async function HomePage({params}: Props) {
         <section id="monte-guide" className="section monte-showcase reveal delay-2">
           <div className="monte-layout">
             <div className="monte-preview">
-              <p className="case-badge">{t('montePreviewBadge')}</p>
+              <p className="monte-kicker">{t('montePreviewBadge')}</p>
               <h2>{t('monteTitle')}</h2>
               <p>{t('monteIntro')}</p>
-              <div className="monte-preview-tags">
-                <span>{t('monteTag1')}</span>
-                <span>{t('monteTag2')}</span>
-                <span>{t('monteTag3')}</span>
-              </div>
+              <ul className="monte-highlights">
+                <li>{t('monteTag1')}</li>
+                <li>{t('monteTag2')}</li>
+                <li>{t('monteTag3')}</li>
+              </ul>
               <Button asChild radius="full" size="3" variant="surface" className="btn-secondary">
                 <a href="https://monte.guide" target="_blank" rel="noopener noreferrer">{t('monteCta')}</a>
               </Button>
