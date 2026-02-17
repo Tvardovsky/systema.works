@@ -2,7 +2,8 @@ import type {Metadata} from 'next';
 import {NextIntlClientProvider, hasLocale} from 'next-intl';
 import {getMessages, getTranslations, setRequestLocale} from 'next-intl/server';
 import {notFound} from 'next/navigation';
-import {routing} from '@/i18n/routing';
+import {routing, type AppLocale} from '@/i18n/routing';
+import {buildLocaleMetadata, buildOrganizationJsonLd} from '@/lib/seo';
 
 type Props = {
   children: React.ReactNode;
@@ -19,21 +20,9 @@ export async function generateMetadata({params}: Pick<Props, 'params'>): Promise
     notFound();
   }
 
-  const t = await getTranslations({locale, namespace: 'Metadata'});
-
-  return {
-    title: t('title'),
-    description: t('description'),
-    alternates: {
-      canonical: locale === 'en' ? '/' : `/${locale}`,
-      languages: {
-        en: '/',
-        'sr-ME': '/sr-ME',
-        ru: '/ru',
-        uk: '/uk'
-      }
-    }
-  };
+  const appLocale = locale as AppLocale;
+  const t = await getTranslations({locale: appLocale, namespace: 'Metadata'});
+  return buildLocaleMetadata(appLocale, t('title'), t('description'));
 }
 
 export default async function LocaleLayout({children, params}: Props) {
@@ -44,10 +33,19 @@ export default async function LocaleLayout({children, params}: Props) {
 
   setRequestLocale(locale);
   const messages = await getMessages();
+  const appLocale = locale as AppLocale;
+  const t = await getTranslations({locale: appLocale, namespace: 'Metadata'});
+  const jsonLd = buildOrganizationJsonLd(appLocale, t('description'));
 
   return (
-    <NextIntlClientProvider locale={locale} messages={messages}>
-      <div lang={locale}>{children}</div>
-    </NextIntlClientProvider>
+    <>
+      <NextIntlClientProvider locale={appLocale} messages={messages}>
+        <div lang={appLocale}>{children}</div>
+      </NextIntlClientProvider>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{__html: JSON.stringify(jsonLd)}}
+      />
+    </>
   );
 }

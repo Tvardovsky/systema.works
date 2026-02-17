@@ -1,11 +1,13 @@
 import Image from 'next/image';
-import Script from 'next/script';
-import {Button} from '@radix-ui/themes';
+import {Button, Container} from '@radix-ui/themes';
 import {GlobeIcon, MobileIcon, RocketIcon, GearIcon} from '@radix-ui/react-icons';
 import {getTranslations} from 'next-intl/server';
 import {LanguageSwitcher} from '@/components/LanguageSwitcher';
 import {SocialLinks} from '@/components/SocialLinks';
 import {ChatWidget} from '@/components/ChatWidget';
+import {WebGLBackground} from '@/components/WebGLBackground';
+import {MobileNav} from '@/components/MobileNav';
+import {LottieLoader} from '@/components/LottieLoader';
 
 type Props = {
   params: Promise<{locale: string}>;
@@ -17,12 +19,10 @@ export default async function HomePage({params}: Props) {
 
   return (
     <>
-      <Script type="module" src="https://unpkg.com/@lottiefiles/dotlottie-wc@0.8.11/dist/dotlottie-wc.js" strategy="afterInteractive" />
-      <main className="page-shell" data-locale={locale}>
-        <div className="bg-orb orb-1" />
-        <div className="bg-orb orb-2" />
-        <div className="bg-grid" aria-hidden="true" />
-
+      <WebGLBackground />
+      <LottieLoader />
+      <main data-locale={locale}>
+        <Container size="4" maxWidth="1460px" className="page-shell">
         <header className="topbar reveal">
           <a className="brand" href="https://systema.works" aria-label="SYSTEMA.WORKS">
             <Image src="/assets/systema-wordmark.svg" alt="SYSTEMA logo" width={136} height={40} priority />
@@ -31,12 +31,21 @@ export default async function HomePage({params}: Props) {
           <nav className="top-nav" aria-label="Primary">
             <a href="#services">{t('navServices')}</a>
             <a href="#cases">{t('navCases')}</a>
-            <a href="#monte-guide">monte.guide</a>
             <a href="#process">{t('navProcess')}</a>
             <a href="#contact">{t('navContact')}</a>
           </nav>
 
-          <LanguageSwitcher />
+          <div className="topbar-tools">
+            <LanguageSwitcher />
+            <MobileNav
+              links={[
+                {href: '#services', label: t('navServices')},
+                {href: '#cases', label: t('navCases')},
+                {href: '#process', label: t('navProcess')},
+                {href: '#contact', label: t('navContact')}
+              ]}
+            />
+          </div>
         </header>
 
         <section id="hero" className="hero">
@@ -63,9 +72,9 @@ export default async function HomePage({params}: Props) {
         </section>
 
         <section className="kpi-grid reveal delay-2" aria-label="KPIs">
-          <article><strong>24/7</strong><span>{t('stat1')}</span></article>
-          <article><strong>4</strong><span>{t('stat2')}</span></article>
-          <article><strong>1 team</strong><span>{t('stat3')}</span></article>
+          <article><strong>{t('stat1Value')}</strong><span>{t('stat1')}</span></article>
+          <article><strong>{t('stat2Value')}</strong><span>{t('stat2')}</span></article>
+          <article><strong>{t('stat3Value')}</strong><span>{t('stat3')}</span></article>
         </section>
 
         <section id="services" className="section reveal delay-1">
@@ -258,7 +267,6 @@ export default async function HomePage({params}: Props) {
           </div>
           <div className="contact-actions">
             <SocialLinks />
-            <a className="contact-mail-chip" href="mailto:hello@systema.works">hello@systema.works</a>
           </div>
         </section>
 
@@ -266,6 +274,7 @@ export default async function HomePage({params}: Props) {
           <span>systema.works</span>
           <span>{t('legal')}</span>
         </footer>
+        </Container>
       </main>
       <ChatWidget />
     </>

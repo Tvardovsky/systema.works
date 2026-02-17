@@ -1,5 +1,6 @@
 import type {Metadata} from 'next';
 import {Theme} from '@radix-ui/themes';
+import {SITE_NAME, SITE_URL} from '@/lib/seo';
 import '@radix-ui/themes/styles.css';
 import '@fontsource/manrope/latin-400.css';
 import '@fontsource/manrope/latin-500.css';
@@ -12,11 +13,27 @@ import '@fontsource/manrope/cyrillic-700.css';
 import './globals.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://systema.works'),
-  title: 'SYSTEMA.WORKS',
-  description: 'Web development, automation, AI implementation and SMM growth systems.',
+  metadataBase: new URL(SITE_URL),
+  applicationName: SITE_NAME,
+  title: SITE_NAME,
+  description: 'Web, mobile, automation and AI implementation agency with multilingual delivery.',
+  keywords: [
+    'web development',
+    'web applications',
+    'mobile app development',
+    'automation',
+    'ai implementation',
+    'smm'
+  ],
+  creator: SITE_NAME,
+  publisher: SITE_NAME,
+  authors: [{name: SITE_NAME}],
   alternates: {
-    canonical: '/'
+    canonical: '/en'
+  },
+  robots: {
+    index: true,
+    follow: true
   }
 };
 
