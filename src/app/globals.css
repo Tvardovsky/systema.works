@@ -7,8 +7,8 @@
   --ink-soft: #314767;
   --line: rgba(24, 52, 94, 0.14);
   --line-strong: rgba(24, 52, 94, 0.24);
-  --font-ui: 'Manrope', 'Inter', 'Segoe UI', 'Roboto', 'Noto Sans', sans-serif;
-  --font-display: 'Manrope', 'Inter', 'Segoe UI', 'Roboto', 'Noto Sans', sans-serif;
+  --font-ui: var(--font-systema), 'Segoe UI', 'Roboto', 'Noto Sans', sans-serif;
+  --font-display: var(--font-systema), 'Segoe UI', 'Roboto', 'Noto Sans', sans-serif;
   --panel-radius: clamp(18px, 2vw, 24px);
   --card-radius: clamp(14px, 1.4vw, 18px);
   --section-gap: clamp(0.9rem, 1.8vw, 1.3rem);
@@ -1470,6 +1470,12 @@ dotlottie-wc {
 }
 
 @media (max-width: 380px) {
+  .hero-text .eyebrow {
+    white-space: normal;
+    text-wrap: balance;
+    line-height: 1.22;
+  }
+
   .mobile-nav-list a {
     font-size: 0.9rem;
   }

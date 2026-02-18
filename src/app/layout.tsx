@@ -1,16 +1,15 @@
 import type {Metadata} from 'next';
+import {Inter} from 'next/font/google';
 import {Theme} from '@radix-ui/themes';
 import {SITE_NAME, SITE_URL} from '@/lib/seo';
 import '@radix-ui/themes/styles.css';
-import '@fontsource/manrope/latin-400.css';
-import '@fontsource/manrope/latin-500.css';
-import '@fontsource/manrope/latin-600.css';
-import '@fontsource/manrope/latin-700.css';
-import '@fontsource/manrope/cyrillic-400.css';
-import '@fontsource/manrope/cyrillic-500.css';
-import '@fontsource/manrope/cyrillic-600.css';
-import '@fontsource/manrope/cyrillic-700.css';
 import './globals.css';
+
+const inter = Inter({
+  subsets: ['latin', 'latin-ext', 'cyrillic'],
+  display: 'swap',
+  variable: '--font-systema'
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -39,8 +38,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({children}: Readonly<{children: React.ReactNode}>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body>
+    <html lang="en" suppressHydrationWarning className={inter.variable}>
+      <body className={inter.className}>
         <Theme
           className="systema-theme"
           appearance="light"
