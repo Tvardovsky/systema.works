@@ -1,6 +1,6 @@
 'use client';
 
-import {FormEvent, useMemo, useState} from 'react';
+import {FormEvent, useEffect, useMemo, useState} from 'react';
 import {Turnstile} from '@marsidev/react-turnstile';
 import {useLocale, useTranslations} from 'next-intl';
 import type {Locale, ServiceInterest} from '@/types/lead';
@@ -28,6 +28,33 @@ export function ChatWidget() {
 
   const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
   const canStart = useMemo(() => Boolean(sessionId), [sessionId]);
+
+  useEffect(() => {
+    const openFromEvent = () => setOpen(true);
+
+    const openFromClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        return;
+      }
+
+      const trigger = target.closest('[data-chat-open]');
+      if (!trigger) {
+        return;
+      }
+
+      event.preventDefault();
+      setOpen(true);
+    };
+
+    window.addEventListener('systema:open-chat', openFromEvent as EventListener);
+    document.addEventListener('click', openFromClick);
+
+    return () => {
+      window.removeEventListener('systema:open-chat', openFromEvent as EventListener);
+      document.removeEventListener('click', openFromClick);
+    };
+  }, []);
 
   async function startSession() {
     if (sessionId) {

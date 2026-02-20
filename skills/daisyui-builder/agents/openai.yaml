@@ -1,0 +1,4 @@
+interface:
+  display_name: "DaisyUI Builder"
+  short_description: "Build DaisyUI interfaces, setup, and themes"
+  default_prompt: "Use $daisyui-builder to set up DaisyUI and build theme-aware UI components in my project."
