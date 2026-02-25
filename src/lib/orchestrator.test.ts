@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'bun:test';
-import {hasBriefConversationContact, shouldDeferWebHandoffUntilBudget} from './orchestrator';
+import {getAreaBudgetClarification, hasBriefConversationContact, shouldDeferWebHandoffUntilBudget} from './orchestrator';
 
 describe('hasBriefConversationContact', () => {
   it('returns true when phone exists in brief', () => {
@@ -61,5 +61,13 @@ describe('shouldDeferWebHandoffUntilBudget', () => {
         highIntent: false
       })
     ).toBe(false);
+  });
+});
+
+describe('getAreaBudgetClarification', () => {
+  it('returns localized area clarification messages', () => {
+    expect(getAreaBudgetClarification('ru')).toContain('площад');
+    expect(getAreaBudgetClarification('uk')).toContain('площ');
+    expect(getAreaBudgetClarification('en')).toContain('area');
   });
 });

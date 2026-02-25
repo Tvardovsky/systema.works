@@ -3,6 +3,7 @@ import {generateAgencyReply} from '@/lib/ai';
 import {computeLeadBriefState, isHighIntentMessage} from '@/lib/lead-brief';
 import {resolveLeadPriority} from '@/lib/lead';
 import {extractLeadSignals, getQualificationPrompt} from '@/lib/lead-signals';
+import {extractBriefSignals} from '@/lib/brief-extractor';
 import {
   appendLeadBriefRevision,
   appendConversationMessage,
@@ -187,6 +188,19 @@ function composeBudgetFollowUp(params: {
   }
   const withPunctuation = /[.?!]$/.test(safeCurrent) ? safeCurrent : `${safeCurrent}.`;
   return `${withPunctuation} ${params.budgetQuestion}`;
+}
+
+export function getAreaBudgetClarification(locale: Locale): string {
+  if (locale === 'ru') {
+    return 'Понял про площадь проекта.';
+  }
+  if (locale === 'uk') {
+    return 'Зрозумів щодо площі проєкту.';
+  }
+  if (locale === 'sr-ME') {
+    return 'Razumijem površinu projekta.';
+  }
+  return 'Understood regarding the project area.';
 }
 
 type WebAutoMergeResult = {
@@ -553,19 +567,22 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       .filter((item) => item.role === 'user' || item.role === 'assistant')
       .map((item) => ({role: item.role as 'user' | 'assistant', content: item.content}));
 
-    const capturedSignals = extractLeadSignals({
+    const briefExtraction = await extractBriefSignals({
+      locale,
+      message: safeEvent.text,
       history: syntheticHistory,
-      message: safeEvent.text
+      conversationId: activeConversationId
     });
+    const extractedSignals = briefExtraction.fields;
     if (
-      capturedSignals.name ||
-      capturedSignals.normalizedEmail ||
-      capturedSignals.normalizedPhone ||
-      capturedSignals.telegramHandle
+      extractedSignals.fullName ||
+      extractedSignals.email ||
+      extractedSignals.phone ||
+      extractedSignals.telegramHandle
     ) {
       const candidateByContact = await findCandidateCustomerByContact({
-        email: capturedSignals.normalizedEmail ?? null,
-        phone: capturedSignals.normalizedPhone ?? null,
+        email: extractedSignals.email ?? null,
+        phone: extractedSignals.phone ?? null,
         excludeCustomerId: activeCustomerId
       });
       if (candidateByContact) {
@@ -587,9 +604,9 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       try {
         await touchCustomerContacts({
           customerId: activeCustomerId,
-          fullName: capturedSignals.name ?? undefined,
-          email: capturedSignals.normalizedEmail ?? undefined,
-          phone: capturedSignals.normalizedPhone ?? undefined,
+          fullName: extractedSignals.fullName ?? undefined,
+          email: extractedSignals.email ?? undefined,
+          phone: extractedSignals.phone ?? undefined,
           locale
         });
         await touchIdentityContacts({
@@ -597,17 +614,17 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
           channel: safeEvent.channel,
           channelUserId: safeEvent.channelUserId,
           username: safeEvent.username,
-          email: capturedSignals.normalizedEmail ?? undefined,
-          phone: capturedSignals.normalizedPhone ?? undefined,
-          telegramHandle: capturedSignals.telegramHandle ?? undefined
+          email: extractedSignals.email ?? undefined,
+          phone: extractedSignals.phone ?? undefined,
+          telegramHandle: extractedSignals.telegramHandle ?? undefined
         });
         await captureIdentityClaims({
           conversationId: activeConversationId,
           customerId: activeCustomerId,
           sourceChannel: safeEvent.channel,
-          email: capturedSignals.normalizedEmail ?? null,
-          phone: capturedSignals.normalizedPhone ?? null,
-          telegramHandle: capturedSignals.telegramHandle ?? null,
+          email: extractedSignals.email ?? null,
+          phone: extractedSignals.phone ?? null,
+          telegramHandle: extractedSignals.telegramHandle ?? null,
           status: claimStatus,
           matchedCustomerId: pendingCustomerId
         });
@@ -620,17 +637,17 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       : undefined;
 
     const mergedBrief = {
-      fullName: capturedSignals.name ?? existingBrief?.fullName ?? null,
-      email: capturedSignals.normalizedEmail ?? existingBrief?.email ?? null,
-      phone: capturedSignals.normalizedPhone ?? existingBrief?.phone ?? null,
-      telegramHandle: capturedSignals.telegramHandle ?? existingBrief?.telegramHandle ?? null,
-      serviceType: capturedSignals.serviceType ?? existingBrief?.serviceType ?? null,
-      primaryGoal: preferRichText(existingBrief?.primaryGoal ?? null, capturedSignals.primaryGoal, 16),
-      firstDeliverable: preferRichText(existingBrief?.firstDeliverable ?? null, capturedSignals.firstDeliverable, 14),
-      timelineHint: capturedSignals.timelineHint ?? existingBrief?.timelineHint ?? null,
-      budgetHint: capturedSignals.budgetHint ?? existingBrief?.budgetHint ?? null,
-      referralSource: preferRichText(existingBrief?.referralSource ?? null, capturedSignals.referralSource, 6),
-      constraints: preferRichText(existingBrief?.constraints ?? null, capturedSignals.constraints, 12)
+      fullName: extractedSignals.fullName ?? existingBrief?.fullName ?? null,
+      email: extractedSignals.email ?? existingBrief?.email ?? null,
+      phone: extractedSignals.phone ?? existingBrief?.phone ?? null,
+      telegramHandle: extractedSignals.telegramHandle ?? existingBrief?.telegramHandle ?? null,
+      serviceType: extractedSignals.serviceType ?? existingBrief?.serviceType ?? null,
+      primaryGoal: preferRichText(existingBrief?.primaryGoal ?? null, extractedSignals.primaryGoal, 16),
+      firstDeliverable: preferRichText(existingBrief?.firstDeliverable ?? null, extractedSignals.firstDeliverable, 14),
+      timelineHint: extractedSignals.timelineHint ?? existingBrief?.timelineHint ?? null,
+      budgetHint: extractedSignals.budgetHint ?? existingBrief?.budgetHint ?? null,
+      referralSource: preferRichText(existingBrief?.referralSource ?? null, extractedSignals.referralSource, 6),
+      constraints: preferRichText(existingBrief?.constraints ?? null, extractedSignals.constraints, 12)
     };
     const briefComputed = computeLeadBriefState(mergedBrief, {
       highIntent: isHighIntentMessage(safeEvent.text)
@@ -736,6 +753,33 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         handoffReady: false,
         missingFields: dedupedMissing,
         conversationStage: 'contact_capture'
+      };
+    }
+
+    const shouldClarifyAreaBudget = briefExtraction.shouldAskClarification
+      && briefExtraction.clarificationType === 'budget'
+      && !updatedBrief.budgetHint;
+    if (shouldClarifyAreaBudget) {
+      const dedupedMissing = reply.missingFields.includes('timeline_or_budget')
+        ? reply.missingFields
+        : (['timeline_or_budget', ...reply.missingFields] as string[]);
+      const budgetQuestion = getQualificationPrompt({
+        locale,
+        hasScope: true,
+        hasBudget: false,
+        hasTimeline: Boolean(updatedBrief.timelineHint)
+      });
+      reply = {
+        ...reply,
+        answer: composeBudgetFollowUp({
+          currentAnswer: getAreaBudgetClarification(locale),
+          budgetQuestion
+        }),
+        nextQuestion: budgetQuestion,
+        handoffReady: false,
+        missingFields: dedupedMissing,
+        conversationStage: 'briefing',
+        leadIntentScore: Math.min(reply.leadIntentScore, 70)
       };
     }
 
@@ -923,6 +967,13 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         memoryAccess: effectiveMemoryAccess,
         memoryLoaded: memoryAllowed && Boolean(memory?.summary),
         dialogMode: reply.dialogMode,
+        extractorUsed: briefExtraction.extractorUsed,
+        extractorModel: briefExtraction.extractorModel,
+        extractorDeterministicFallback: briefExtraction.deterministicFallback,
+        extractorAmbiguities: briefExtraction.ambiguities,
+        extractorFilledFields: Object.entries(briefExtraction.fields)
+          .filter(([, value]) => Boolean(cleanText(value)))
+          .map(([key]) => key),
         chatLocked,
         chatMode,
         cooldownUntil: cooldownUntil ?? null,
@@ -953,6 +1004,13 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         memoryLoaded: memoryAllowed && Boolean(memory?.summary),
         verificationHint,
         dialogMode: reply.dialogMode,
+        extractorUsed: briefExtraction.extractorUsed,
+        extractorModel: briefExtraction.extractorModel,
+        extractorDeterministicFallback: briefExtraction.deterministicFallback,
+        extractorAmbiguities: briefExtraction.ambiguities,
+        extractorFilledFields: Object.entries(briefExtraction.fields)
+          .filter(([, value]) => Boolean(cleanText(value)))
+          .map(([key]) => key),
         chatLocked,
         chatMode,
         cooldownUntil: cooldownUntil ?? null,

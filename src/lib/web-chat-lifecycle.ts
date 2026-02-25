@@ -157,27 +157,6 @@ export function getHandoffTerminalMessage(locale: Locale): string {
   return 'Thank you, your request has been handed to a manager. Processing has already started. The next message in this chat will be available in 3 hours.';
 }
 
-export function getLowCostAckMessage(locale: Locale, remainingMessages: number): string {
-  if (locale === 'ru') {
-    return remainingMessages > 0
-      ? `Спасибо за уточнение, я добавил это в заявку. Менеджер уже рассматривает запрос. Доступно ещё ${remainingMessages} уточнение до следующей паузы.`
-      : 'Спасибо за уточнение, я добавил это в заявку. Менеджер уже рассматривает запрос.';
-  }
-  if (locale === 'uk') {
-    return remainingMessages > 0
-      ? `Дякую за уточнення, я додав це до заявки. Менеджер вже розглядає запит. Доступно ще ${remainingMessages} уточнення до наступної паузи.`
-      : 'Дякую за уточнення, я додав це до заявки. Менеджер вже розглядає запит.';
-  }
-  if (locale === 'sr-ME') {
-    return remainingMessages > 0
-      ? `Hvala na pojašnjenju, dodao sam to u zahtjev. Menadžer već razmatra upit. Dostupno je još ${remainingMessages} pojašnjenje do sledeće pauze.`
-      : 'Hvala na pojašnjenju, dodao sam to u zahtjev. Menadžer već razmatra upit.';
-  }
-  return remainingMessages > 0
-    ? `Thanks for the clarification, I added it to your request. A manager is already reviewing it. You can send ${remainingMessages} more clarification before the next pause.`
-    : 'Thanks for the clarification, I added it to your request. A manager is already reviewing it.';
-}
-
 export function parseCooldownCookie(rawValue: string | undefined, now = new Date()): {
   cooldownUntil: string | null;
   retryAfterSeconds: number;

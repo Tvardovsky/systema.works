@@ -336,6 +336,7 @@ a:not(.btn) {
   transform-origin: right bottom;
   animation: chat-panel-in 180ms ease-out both;
   overscroll-behavior: contain;
+  touch-action: manipulation;
 }
 
 .admin-shell {
@@ -718,16 +719,23 @@ a:not(.btn) {
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 0.58rem;
   overflow: auto;
+  overscroll-behavior: contain;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
   padding-right: 0.1rem;
+}
+
+.chat-log > .chat-row:first-child {
+  margin-top: auto;
 }
 
 .chat-row {
   display: flex;
+  flex: 0 0 auto;
 }
 
 .chat-row-user {

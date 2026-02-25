@@ -99,6 +99,11 @@ const ASAP_HINTS = [
 const UP_TO_BUDGET_HINTS = ['up to', 'under', 'max', 'maximum', 'less than', 'до', 'не более', 'максимум', 'najviše'];
 const APPROX_BUDGET_HINTS = ['about', 'around', 'approx', '~', 'примерно', 'около', 'где-то', 'орієнтовно', 'otprilike', 'oko'];
 const BUDGET_NUMBER_HINTS = ['k', 'к', 'm', 'м', 'тыс', 'thousand', 'млн', 'million'];
+const AREA_HINTS = [
+  'м²', 'м2', 'кв.м', 'кв м', 'квадрат', 'площад', 'участок', 'сотк', 'га',
+  'sqm', 'sq m', 'square meter', 'square meters', 'area', 'plot', 'parcel', 'lot size',
+  'm2', 'kvadrat', 'površin', 'plac'
+];
 
 const CURRENCY_HINTS: Array<{code: string; regex: RegExp}> = [
   {code: 'EUR', regex: /(?:€|\beur\b|\beuro\b|\beuros\b|евро|evra)/i},
@@ -474,10 +479,49 @@ function hasBudgetIndicators(params: {lower: string; currency: string | null}): 
   return BUDGET_NUMBER_HINTS.some((hint) => params.lower.includes(hint));
 }
 
+export function hasAreaSignal(text: string): boolean {
+  const lower = text.toLowerCase();
+  return AREA_HINTS.some((hint) => lower.includes(hint));
+}
+
+export function hasExplicitBudgetSignal(text: string): boolean {
+  const lower = text.toLowerCase();
+  const currency = detectCurrencyCode(text);
+  if (currency) {
+    return true;
+  }
+  return includesAny(lower, BUDGET_HINTS);
+}
+
 type BudgetParse = {
   raw: string;
   normalized: string;
 };
+
+function findBudgetFocusedToken(text: string): string | null {
+  const afterBudgetKeyword = text.match(
+    /(?:budget|бюджет|кошторис|budžet|cijena|cena|цена|стоим(?:ость)?)[^\d]{0,28}([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)/i
+  )?.[1];
+  if (afterBudgetKeyword) {
+    return afterBudgetKeyword.trim();
+  }
+
+  const beforeCurrency = text.match(
+    /([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)\s*(?:€|\$|£|₽|₴|\beur\b|\busd\b|\bgbp\b|\brub\b|\buah\b|\baed\b|\bchf\b)/i
+  )?.[1];
+  if (beforeCurrency) {
+    return beforeCurrency.trim();
+  }
+
+  const afterCurrency = text.match(
+    /(?:€|\$|£|₽|₴|\beur\b|\busd\b|\bgbp\b|\brub\b|\buah\b|\baed\b|\bchf\b)[^\d]{0,12}([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)/i
+  )?.[1];
+  if (afterCurrency) {
+    return afterCurrency.trim();
+  }
+
+  return null;
+}
 
 function parseBudgetHint(text: string): BudgetParse | null {
   const cleaned = clean(text);
@@ -486,7 +530,13 @@ function parseBudgetHint(text: string): BudgetParse | null {
   }
   const lower = cleaned.toLowerCase();
   const currency = detectCurrencyCode(cleaned);
-  const hasIndicators = hasBudgetIndicators({lower, currency});
+  const hasArea = hasAreaSignal(cleaned);
+  const hasExplicitBudget = hasExplicitBudgetSignal(cleaned);
+  const hasIndicators = hasBudgetIndicators({lower, currency}) && (!hasArea || hasExplicitBudget);
+
+  if (hasArea && !hasExplicitBudget) {
+    return null;
+  }
 
   const rangeMatch = cleaned.match(/([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)\s*[-–—]\s*([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)/i);
   if (rangeMatch) {
@@ -511,11 +561,12 @@ function parseBudgetHint(text: string): BudgetParse | null {
   if (!hasIndicators) {
     return null;
   }
+  const budgetFocusedToken = hasExplicitBudget ? findBudgetFocusedToken(cleaned) : null;
   const singleMatch = cleaned.match(/([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)/i);
   if (!singleMatch) {
     return null;
   }
-  const token = singleMatch[1] ?? '';
+  const token = budgetFocusedToken ?? singleMatch[1] ?? '';
   const justDigits = token.replace(/[^\d]/g, '');
   if (!currency && !includesAny(lower, BUDGET_HINTS) && !/(k|к|m|м|тыс|thousand|млн|million)\b/i.test(token) && justDigits.length >= 8) {
     return null;
@@ -638,7 +689,7 @@ function inferPrimaryGoal(message: string, hasScope: boolean): string | null {
   return sentence.length > 200 ? `${sentence.slice(0, 200)}...` : sentence;
 }
 
-export function extractLeadSignals(params: {
+export function extractLeadSignalsDeterministic(params: {
   history: ChatMessage[];
   message: string;
 }): LeadSignals {
@@ -699,6 +750,13 @@ export function extractLeadSignals(params: {
     hasTimeline,
     userMessageCount: params.history.filter((m) => m.role === 'user').length
   };
+}
+
+export function extractLeadSignals(params: {
+  history: ChatMessage[];
+  message: string;
+}): LeadSignals {
+  return extractLeadSignalsDeterministic(params);
 }
 
 export function getIdentityRequestPrompt(locale: Locale): string {

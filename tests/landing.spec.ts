@@ -69,6 +69,14 @@ function contrastRatio(foreground: string, background: string) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function buildChatHistory(count = 80): Array<{role: 'user' | 'assistant'; content: string}> {
+  const longTail = ' details about scope, integrations, timeline and expected outcomes for this request.';
+  return Array.from({length: count}, (_, index) => ({
+    role: index % 2 === 0 ? 'assistant' : 'user',
+    content: `${index % 2 === 0 ? 'Assistant' : 'User'} message ${index + 1}${longTail}`
+  }));
+}
+
 test.describe('landing', () => {
   for (const locale of locales) {
     test(`renders localized content for ${locale}`, async ({page}) => {
@@ -565,6 +573,138 @@ test.describe('landing', () => {
       throw new Error('Failed to parse bubble colors');
     }
     expect(relativeLuminance(userBg)).toBeLessThan(relativeLuminance(assistantBg));
+  });
+
+  test('chat scroll stays inside chat on mobile when locked', async ({page}) => {
+    await page.setViewportSize({width: 390, height: 844});
+
+    await page.route('**/api/chat/session/start', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          allowed: true,
+          sessionId: 'test-locked-mobile-session',
+          chatLocked: true,
+          chatMode: 'handoff_locked',
+          retryAfterSeconds: 3600,
+          message: 'Chat is in cooldown mode.',
+          history: buildChatHistory(96)
+        })
+      });
+    });
+
+    await page.goto('/en');
+    await page.addStyleTag({content: '.chat-panel .chat-log { height: 120px !important; max-height: 120px !important; }'});
+    await page.evaluate(() => window.scrollTo(0, 1400));
+
+    await page.locator('button.chat-launcher').click();
+    const startButton = page.getByRole('button', {name: 'Start', exact: true});
+    if (await startButton.count()) {
+      await startButton.click();
+    }
+
+    const chatLog = page.locator('aside.chat-panel .chat-log');
+    await expect(chatLog).toBeVisible();
+    await expect(page.locator('.chat-composer')).toHaveCount(0);
+    await expect(page.locator('aside.chat-panel .chat-row')).toHaveCount(96);
+
+    const logMetrics = await chatLog.evaluate((element) => ({
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight
+    }));
+    expect(logMetrics.scrollHeight).toBeGreaterThan(logMetrics.clientHeight + 20);
+
+    const lockedWindowY = await page.evaluate(() => window.scrollY);
+    const scrolledTop = await chatLog.evaluate((element) => {
+      element.scrollTop = 0;
+      element.scrollBy(0, 920);
+      return element.scrollTop;
+    });
+
+    const afterScroll = await page.evaluate(() => {
+      const chat = document.querySelector('aside.chat-panel .chat-log') as HTMLElement | null;
+      return {
+        windowY: window.scrollY,
+        chatScrollTop: chat?.scrollTop ?? 0
+      };
+    });
+
+    expect(scrolledTop).toBeGreaterThan(0);
+    expect(afterScroll.chatScrollTop).toBeGreaterThan(0);
+    expect(Math.abs(afterScroll.windowY - lockedWindowY)).toBeLessThanOrEqual(1);
+  });
+
+  test('chat scroll lock works on wide viewport for coarse pointer devices', async ({page}) => {
+    await page.addInitScript(() => {
+      const originalMatchMedia = window.matchMedia.bind(window);
+      window.matchMedia = ((query: string) => {
+        const mql = originalMatchMedia(query);
+        if (query === '(pointer: coarse)' || query === '(hover: none)') {
+          return new Proxy(mql, {
+            get(target, prop, receiver) {
+              if (prop === 'matches') {
+                return true;
+              }
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === 'function' ? value.bind(target) : value;
+            }
+          });
+        }
+        return mql;
+      }) as typeof window.matchMedia;
+    });
+
+    await page.setViewportSize({width: 1180, height: 900});
+    await page.route('**/api/chat/session/start', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          allowed: true,
+          sessionId: 'test-locked-coarse-session',
+          chatLocked: true,
+          chatMode: 'handoff_locked',
+          retryAfterSeconds: 3600,
+          message: 'Chat is in cooldown mode.',
+          history: buildChatHistory(100)
+        })
+      });
+    });
+
+    await page.goto('/en');
+    await page.addStyleTag({content: '.chat-panel .chat-log { height: 120px !important; max-height: 120px !important; }'});
+    await page.evaluate(() => window.scrollTo(0, 1500));
+
+    await page.locator('button.chat-launcher').click();
+    const startButton = page.getByRole('button', {name: 'Start', exact: true});
+    if (await startButton.count()) {
+      await startButton.click();
+    }
+
+    const chatLog = page.locator('aside.chat-panel .chat-log');
+    await expect(chatLog).toBeVisible();
+    await expect(page.locator('.chat-composer')).toHaveCount(0);
+    await expect(page.locator('aside.chat-panel .chat-row')).toHaveCount(100);
+
+    const lockY = await page.evaluate(() => window.scrollY);
+    const moved = await chatLog.evaluate((element) => {
+      element.scrollTop = 0;
+      element.scrollBy(0, 980);
+      return element.scrollTop;
+    });
+
+    const state = await page.evaluate(() => {
+      const chat = document.querySelector('aside.chat-panel .chat-log') as HTMLElement | null;
+      return {
+        windowY: window.scrollY,
+        chatScrollTop: chat?.scrollTop ?? 0
+      };
+    });
+
+    expect(moved).toBeGreaterThan(0);
+    expect(state.chatScrollTop).toBeGreaterThan(0);
+    expect(Math.abs(state.windowY - lockY)).toBeLessThanOrEqual(1);
   });
 
   test('language switcher changes locale prefix and content', async ({page}) => {

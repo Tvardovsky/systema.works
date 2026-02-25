@@ -8,6 +8,8 @@ import {
   getNameOnlyPrompt,
   getQualificationPrompt,
   getReferralSourcePrompt,
+  hasAreaSignal,
+  hasExplicitBudgetSignal,
   wasReferralQuestionAsked,
   mapServiceTypeToFamily
 } from '@/lib/lead-signals';
@@ -15,8 +17,12 @@ import {computeLeadBriefState, isHighIntentMessage} from '@/lib/lead-brief';
 
 const FAST_MODEL = process.env.OPENAI_FAST_MODEL ?? 'gpt-5-mini';
 const QUALITY_MODEL = process.env.OPENAI_QUALITY_MODEL ?? 'gpt-5-mini';
-const REPLY_MAX_OUTPUT_TOKENS = Math.max(80, Number.parseInt(process.env.OPENAI_MAX_OUTPUT_TOKENS ?? '220', 10) || 220);
-const HISTORY_WINDOW = Math.max(2, Number.parseInt(process.env.OPENAI_HISTORY_WINDOW ?? '6', 10) || 6);
+const FALLBACK_MODEL = process.env.OPENAI_FALLBACK_MODEL ?? 'gpt-5-mini';
+const REPLY_MAX_OUTPUT_TOKENS = Math.max(120, Number.parseInt(process.env.OPENAI_MAX_OUTPUT_TOKENS ?? '360', 10) || 360);
+const FALLBACK_MAX_OUTPUT_TOKENS = Math.max(100, Number.parseInt(process.env.OPENAI_FALLBACK_MAX_OUTPUT_TOKENS ?? '280', 10) || 280);
+const REPHRASE_MAX_OUTPUT_TOKENS = Math.max(80, Number.parseInt(process.env.OPENAI_REPHRASE_MAX_OUTPUT_TOKENS ?? '220', 10) || 220);
+const REPLY_REPETITION_THRESHOLD = Math.max(0.55, Math.min(0.95, Number.parseFloat(process.env.OPENAI_REPLY_REPETITION_THRESHOLD ?? '0.74') || 0.74));
+const HISTORY_WINDOW = Math.max(2, Number.parseInt(process.env.OPENAI_HISTORY_WINDOW ?? '10', 10) || 10);
 
 const scopeKeywords = [
   'website', 'web', 'web app', 'app', 'mobile', 'ios', 'android', 'landing',
@@ -50,13 +56,6 @@ const hotLeadHints = [
   'бюджет', 'термін', 'дедлайн', 'оцінк', 'вартіст', 'договір', 'дзвінок', 'зустріч',
   'budzet', 'rok', 'procena', 'cena', 'ugovor', 'poziv', 'sastanak'
 ];
-
-const disallowedFallback: Record<Locale, string> = {
-  en: 'I can help with agency services only: web/mobile products, automation, AI, UI/UX execution, and SMM growth. Tell me your task in this scope.',
-  'sr-ME': 'Mogu pomoći samo u okviru agencijskih usluga: web/mobile proizvodi, automatizacija, AI, UI/UX realizacija i SMM rast. Opišite zadatak u tom okviru.',
-  ru: 'Я помогаю только в рамках услуг агентства: веб/мобайл продукты, автоматизация, ИИ, UI/UX-реализация и SMM. Опишите задачу в этих рамках.',
-  uk: 'Я допомагаю лише в межах послуг агенції: веб/мобайл продукти, автоматизація, ШІ, UI/UX-реалізація та SMM. Опишіть задачу в цих межах.'
-};
 
 const scopeClarifyPrompt: Record<Locale, string> = {
   en: 'Could you clarify your request in one sentence: what product or service do you want us to build first?',
@@ -343,8 +342,11 @@ function trimForAnswer(input: string): string {
   return `${clean.slice(0, 417)}...`;
 }
 
-function hasQuestion(text: string): boolean {
-  return text.includes('?');
+function hasAmbiguousNumericBudgetContext(message: string): boolean {
+  const hasArea = hasAreaSignal(message);
+  const hasBudget = hasExplicitBudgetSignal(message);
+  const numericTokens = message.match(/\d[\d\s.,]*/g)?.length ?? 0;
+  return hasArea && !hasBudget && numericTokens > 0;
 }
 
 function shouldRetryTemplateAnswer(params: {
@@ -521,151 +523,104 @@ function handoffNotice(locale: Locale): string {
   return 'Great, I am handing this lead to a manager.';
 }
 
-type AckSignalType = 'contact' | 'timeline' | 'budget' | 'handoff' | 'progress';
-
-const ACK_VARIANTS: Record<Locale, Record<AckSignalType, string[]>> = {
-  ru: {
-    contact: [
-      'Спасибо, контакт зафиксировал.',
-      'Принял, контакт добавил в заявку.',
-      'Контакт сохранил, продолжаем.'
-    ],
-    timeline: [
-      'Принял, сроки запуска зафиксировал.',
-      'По срокам записал, это учтём в оценке.',
-      'Сроки отметил, двигаемся дальше.'
-    ],
-    budget: [
-      'Принял, ориентир по бюджету зафиксировал.',
-      'Бюджетный ориентир записал для точной оценки.',
-      'Бюджет отметил, это поможет с приоритизацией.'
-    ],
-    handoff: [
-      'Отлично, данных достаточно, передаю запрос менеджеру на оценку и следующий шаг.',
-      'Хорошо, информации хватает, передаю лид менеджеру.',
-      'Принято, передаю заявку менеджеру для следующего шага.'
-    ],
-    progress: [
-      'Понял задачу, двигаемся дальше по брифу.',
-      'Принял контекст, продолжим уточнения.',
-      'Отлично, иду дальше по деталям.'
-    ]
-  },
-  uk: {
-    contact: [
-      'Дякую, контакт зафіксував.',
-      'Прийняв, контакт додав до заявки.',
-      'Контакт зберіг, рухаємось далі.'
-    ],
-    timeline: [
-      'Прийняв, строки запуску зафіксував.',
-      'Строки записав, врахуємо це в оцінці.',
-      'По термінах зафіксував, продовжуємо.'
-    ],
-    budget: [
-      'Прийняв, орієнтир бюджету зафіксував.',
-      'Бюджетний орієнтир зберіг для точної оцінки.',
-      'Бюджет зафіксував, це допоможе з пріоритетами.'
-    ],
-    handoff: [
-      'Чудово, даних достатньо, передаю запит менеджеру на оцінку та наступний крок.',
-      'Добре, інформації вистачає, передаю лід менеджеру.',
-      'Прийняв, передаю заявку менеджеру для наступного кроку.'
-    ],
-    progress: [
-      'Зрозумів запит, продовжуємо бриф.',
-      'Прийняв контекст, рухаємось далі з уточненнями.',
-      'Добре, переходжу до наступного уточнення.'
-    ]
-  },
-  'sr-ME': {
-    contact: [
-      'Hvala, kontakt je zabilježen.',
-      'Kontakt je dodat u prijavu, nastavljamo.',
-      'Kontakt je sačuvan, idemo dalje.'
-    ],
-    timeline: [
-      'Rok lansiranja je zabilježen.',
-      'Rok je evidentiran i biće uzet u procjenu.',
-      'Rok sam upisao, nastavimo dalje.'
-    ],
-    budget: [
-      'Budžetski okvir je zabilježen.',
-      'Budžetski okvir je upisan za precizniju procjenu.',
-      'Budžet je evidentiran, to pomaže prioritizaciji.'
-    ],
-    handoff: [
-      'Odlično, imamo dovoljno podataka i predajem zahtjev menadžeru.',
-      'Informacije su dovoljne, prosleđujem lead menadžeru.',
-      'U redu, predajem prijavu menadžeru za sledeći korak.'
-    ],
-    progress: [
-      'Razumijem zahtjev, nastavimo sa brief-om.',
-      'Kontekst je jasan, idemo na sledeće pojašnjenje.',
-      'Odlično, nastavljamo sa detaljima.'
-    ]
-  },
-  en: {
-    contact: [
-      'Thanks, I have your contact.',
-      'Got it, I added your contact to the brief.',
-      'Contact saved, let us continue.'
-    ],
-    timeline: [
-      'Got it, I noted the launch timeline.',
-      'Timeline captured and added for estimation.',
-      'Timeline is noted, moving to the next detail.'
-    ],
-    budget: [
-      'Got it, I noted the budget range.',
-      'Budget range captured for a more precise estimate.',
-      'Budget is recorded, that helps with prioritization.'
-    ],
-    handoff: [
-      'Great, I have enough details and will hand this to a manager.',
-      'Thanks, this is enough context, handing off to a manager.',
-      'Understood, I am passing this to a manager for the next step.'
-    ],
-    progress: [
-      'Understood, let us continue the brief.',
-      'Got it, we can move to the next clarification.',
-      'Thanks, context is clear, continuing with details.'
-    ]
+function maxSimilarityToRecent(answer: string, recentAssistantAnswers: string[]): number {
+  if (!recentAssistantAnswers.length) {
+    return 0;
   }
-};
-
-function isAcknowledgementTooSimilar(candidate: string, recentAssistantAnswers: string[]): boolean {
-  const candidateLower = candidate.toLowerCase();
-  return recentAssistantAnswers.some((previous) => {
-    const previousLower = previous.toLowerCase();
-    return previousLower.includes(candidateLower) || similarity(candidate, previous) >= 0.62;
-  });
+  return recentAssistantAnswers.reduce((max, previous) => Math.max(max, similarity(answer, previous)), 0);
 }
 
-function buildAlternativeAcknowledgement(params: {
-  locale: Locale;
-  signalType: AckSignalType;
-  recentAssistantAnswers?: string[];
-  preferred?: string;
-}): string {
-  const variants = ACK_VARIANTS[params.locale][params.signalType];
-  const recentAssistantAnswers = params.recentAssistantAnswers ?? [];
-  const candidates = params.preferred
-    ? [params.preferred, ...variants.filter((variant) => variant !== params.preferred)]
-    : variants;
-
-  for (const candidate of candidates) {
-    if (!isAcknowledgementTooSimilar(candidate, recentAssistantAnswers)) {
-      return candidate;
-    }
-  }
-
-  if (!candidates.length) {
+function buildMessageSnippet(message: string, maxLength = 96): string {
+  const cleaned = cleanText(message) ?? '';
+  if (!cleaned) {
     return '';
   }
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, maxLength - 1).trimEnd()}…`;
+}
 
-  const deterministicIndex = recentAssistantAnswers.join('|').length % candidates.length;
-  return candidates[deterministicIndex];
+function buildGracefulSignalSummary(params: {
+  locale: Locale;
+  message: string;
+  hasContact: boolean;
+  hasTimeline: boolean;
+  hasBudget: boolean;
+  hasAreaWithoutBudget: boolean;
+  handoffReady: boolean;
+}): string {
+  const snippet = buildMessageSnippet(params.message);
+  if (params.locale === 'ru') {
+    if (params.hasContact) {
+      return 'Контакт увидел, добавил в заявку.';
+    }
+    if (params.hasAreaWithoutBudget) {
+      return 'Понял контекст по площади, финансовый ориентир отдельно не фиксирую.';
+    }
+    if (params.hasTimeline) {
+      return 'По срокам запуска всё отметил в брифе.';
+    }
+    if (params.hasBudget) {
+      return 'Ориентир по бюджету отметил в брифе.';
+    }
+    if (params.handoffReady) {
+      return 'Деталей уже достаточно для передачи менеджеру.';
+    }
+    return snippet ? `Контекст зафиксировал: «${snippet}».` : 'Контекст зафиксировал.';
+  }
+  if (params.locale === 'uk') {
+    if (params.hasContact) {
+      return 'Контакт бачу, додав до заявки.';
+    }
+    if (params.hasAreaWithoutBudget) {
+      return 'Зрозумів контекст щодо площі, фінансовий орієнтир окремо не фіксую.';
+    }
+    if (params.hasTimeline) {
+      return 'За термінами запуску все зафіксував у брифі.';
+    }
+    if (params.hasBudget) {
+      return 'Бюджетний орієнтир зафіксував у брифі.';
+    }
+    if (params.handoffReady) {
+      return 'Даних вже достатньо для передачі менеджеру.';
+    }
+    return snippet ? `Контекст зафіксував: «${snippet}».` : 'Контекст зафіксував.';
+  }
+  if (params.locale === 'sr-ME') {
+    if (params.hasContact) {
+      return 'Kontakt sam vidio i dodao u prijavu.';
+    }
+    if (params.hasAreaWithoutBudget) {
+      return 'Razumio sam kontekst površine, budžet ne bilježim bez jasne potvrde.';
+    }
+    if (params.hasTimeline) {
+      return 'Rok lansiranja je zabilježen u brief-u.';
+    }
+    if (params.hasBudget) {
+      return 'Budžetski okvir sam zabilježio u brief-u.';
+    }
+    if (params.handoffReady) {
+      return 'Imamo dovoljno podataka za predaju menadžeru.';
+    }
+    return snippet ? `Kontekst je zabilježen: "${snippet}".` : 'Kontekst je zabilježen.';
+  }
+  if (params.hasContact) {
+    return 'I captured your contact and added it to the brief.';
+  }
+  if (params.hasAreaWithoutBudget) {
+    return 'I captured the area context and kept budget separate until it is explicit.';
+  }
+  if (params.hasTimeline) {
+    return 'I noted the launch timeline in the brief.';
+  }
+  if (params.hasBudget) {
+    return 'I noted the budget range in the brief.';
+  }
+  if (params.handoffReady) {
+    return 'We already have enough detail to hand this to a manager.';
+  }
+  return snippet ? `I captured this context: "${snippet}".` : 'I captured the context.';
 }
 
 function getQuestionSlotOrder(deferContactUntilBriefComplete = false): QuestionSlot[] {
@@ -1215,7 +1170,285 @@ function ensureTargetQuestion(answer: string, targetQuestion: string): string {
   return trimForAnswer(`${statementPart}. ${normalizedTarget}`);
 }
 
-function fallbackAllowedReply(params: {
+type TopicGuard = 'allowed' | 'unclear' | 'disallowed';
+
+function getTopicGuard(message: string, conversationInScope: boolean): TopicGuard {
+  if (conversationInScope) {
+    return 'allowed';
+  }
+  return isClearlyOutOfScope(message) ? 'disallowed' : 'unclear';
+}
+
+function computeLeadIntentScore(params: {
+  normalizedScore: number;
+  highIntent: boolean;
+  handoffReady: boolean;
+  completenessScore: number;
+}): number {
+  let leadIntentScore = Math.max(
+    params.normalizedScore,
+    params.highIntent ? 72 : 0,
+    params.completenessScore >= 80 ? 65 : 0
+  );
+  if (!params.handoffReady && !params.highIntent) {
+    leadIntentScore = Math.min(72, leadIntentScore);
+  }
+  return leadIntentScore;
+}
+
+function buildGuardPrefix(locale: Locale, topicGuard: TopicGuard): string {
+  if (topicGuard === 'allowed') {
+    return '';
+  }
+  if (locale === 'ru') {
+    return topicGuard === 'disallowed'
+      ? 'Понял запрос, но нужно оставаться в рамках цифровой разработки и автоматизации.'
+      : 'Понял, уточню направление, чтобы ответить точнее.';
+  }
+  if (locale === 'uk') {
+    return topicGuard === 'disallowed'
+      ? 'Зрозумів запит, але потрібно залишатися в межах цифрової розробки та автоматизації.'
+      : 'Зрозумів, уточню напрям, щоб відповісти точніше.';
+  }
+  if (locale === 'sr-ME') {
+    return topicGuard === 'disallowed'
+      ? 'Razumio sam upit, ali treba da ostanemo u okviru digitalnog razvoja i automatizacije.'
+      : 'Razumio sam, pojasniću pravac da odgovor bude precizan.';
+  }
+  return topicGuard === 'disallowed'
+    ? 'Understood your request, but we should stay within digital product and automation scope.'
+    : 'Understood, I will clarify direction to respond precisely.';
+}
+
+function getNonRepeatingLead(locale: Locale): string {
+  if (locale === 'ru') {
+    return 'Уточнение принял, продолжаю по контексту.';
+  }
+  if (locale === 'uk') {
+    return 'Уточнення прийняв, продовжую за контекстом.';
+  }
+  if (locale === 'sr-ME') {
+    return 'Pojašnjenje je primljeno, nastavljam po kontekstu.';
+  }
+  return 'Clarification received, continuing with context.';
+}
+
+function buildGracefulFailAnswer(params: {
+  locale: Locale;
+  topicGuard: TopicGuard;
+  message: string;
+  hasContact: boolean;
+  hasTimeline: boolean;
+  hasBudget: boolean;
+  hasAreaWithoutBudget: boolean;
+  handoffReady: boolean;
+}): string {
+  const prefix = buildGuardPrefix(params.locale, params.topicGuard);
+  const summary = buildGracefulSignalSummary({
+    locale: params.locale,
+    message: params.message,
+    hasContact: params.hasContact,
+    hasTimeline: params.hasTimeline,
+    hasBudget: params.hasBudget,
+    hasAreaWithoutBudget: params.hasAreaWithoutBudget,
+    handoffReady: params.handoffReady
+  });
+  return trimForAnswer([prefix, summary].filter(Boolean).join(' '));
+}
+
+function applyAnswerConstraints(params: {
+  answer: string;
+  topicGuard: TopicGuard;
+  locale: Locale;
+  nextQuestion: string;
+  verificationHint?: string;
+  handoffReady: boolean;
+}): string {
+  let composed = trimForAnswer(params.answer);
+  if (params.verificationHint) {
+    composed = trimForAnswer(`${composed} ${params.verificationHint}`);
+  }
+  if (params.topicGuard !== 'allowed') {
+    return ensureTargetQuestion(composed, scopeClarifyPrompt[params.locale]);
+  }
+  composed = ensureTargetQuestion(composed, params.nextQuestion);
+  if (params.handoffReady) {
+    const low = composed.toLowerCase();
+    const mentionsHandoff = low.includes('manager') || low.includes('менеджер') || low.includes('менеджеру');
+    if (!mentionsHandoff) {
+      composed = trimForAnswer(`${composed} ${handoffNotice(params.locale)}`);
+    }
+  }
+  return composed;
+}
+
+async function requestStructuredReply(params: {
+  conversationId?: string;
+  model: string;
+  maxOutputTokens: number;
+  systemPrompt: string;
+  developerPrompt: string;
+  userPrompt: string;
+  path: string;
+  stage: string;
+}): Promise<{
+  parsed: ReturnType<typeof aiReplySchema.safeParse>;
+  content: string;
+} | null> {
+  if (!client) {
+    return null;
+  }
+  const startedAt = Date.now();
+  try {
+    const completion = await client.chat.completions.create({
+      model: params.model,
+      messages: [
+        {role: 'system', content: params.systemPrompt},
+        {role: 'developer', content: params.developerPrompt},
+        {role: 'user', content: params.userPrompt}
+      ],
+      max_completion_tokens: params.maxOutputTokens
+    });
+    const usage = completion.usage;
+    console.info('[ai] OpenAI usage', {
+      path: params.path,
+      stage: params.stage,
+      conversationId: params.conversationId ?? 'unknown',
+      model: params.model,
+      inputTokens: usage?.prompt_tokens ?? null,
+      outputTokens: usage?.completion_tokens ?? null,
+      totalTokens: usage?.total_tokens ?? null,
+      requestId: (completion as {_request_id?: string})._request_id ?? null,
+      latencyMs: Date.now() - startedAt
+    });
+    const content = completion.choices[0]?.message?.content ?? '';
+    return {
+      parsed: aiReplySchema.safeParse(safeJsonParse(content)),
+      content
+    };
+  } catch (error) {
+    if (isRecoverableOpenAiError(error)) {
+      if (error instanceof OpenAI.APIError) {
+        console.warn('[ai] Recoverable OpenAI error while requesting structured reply', {
+          path: params.path,
+          stage: params.stage,
+          status: error.status,
+          code: error.code,
+          requestId: error.requestID,
+          model: params.model
+        });
+      } else {
+        console.warn('[ai] Recoverable connection/server error while requesting structured reply', {
+          path: params.path,
+          stage: params.stage,
+          model: params.model
+        });
+      }
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function requestTextReply(params: {
+  conversationId?: string;
+  model: string;
+  maxOutputTokens: number;
+  messages: Array<{role: 'system' | 'developer' | 'user'; content: string}>;
+  path: string;
+  stage: string;
+}): Promise<string | null> {
+  if (!client) {
+    return null;
+  }
+  const startedAt = Date.now();
+  try {
+    const completion = await client.chat.completions.create({
+      model: params.model,
+      messages: params.messages,
+      max_completion_tokens: params.maxOutputTokens
+    });
+    const usage = completion.usage;
+    console.info('[ai] OpenAI usage', {
+      path: params.path,
+      stage: params.stage,
+      conversationId: params.conversationId ?? 'unknown',
+      model: params.model,
+      inputTokens: usage?.prompt_tokens ?? null,
+      outputTokens: usage?.completion_tokens ?? null,
+      totalTokens: usage?.total_tokens ?? null,
+      requestId: (completion as {_request_id?: string})._request_id ?? null,
+      latencyMs: Date.now() - startedAt
+    });
+    return cleanText(completion.choices[0]?.message?.content ?? null);
+  } catch (error) {
+    if (isRecoverableOpenAiError(error)) {
+      if (error instanceof OpenAI.APIError) {
+        console.warn('[ai] Recoverable OpenAI error while requesting text reply', {
+          path: params.path,
+          stage: params.stage,
+          status: error.status,
+          code: error.code,
+          requestId: error.requestID,
+          model: params.model
+        });
+      } else {
+        console.warn('[ai] Recoverable connection/server error while requesting text reply', {
+          path: params.path,
+          stage: params.stage,
+          model: params.model
+        });
+      }
+      return null;
+    }
+    throw error;
+  }
+}
+
+function toScopedResponse(params: {
+  locale: Locale;
+  topicGuard: TopicGuard;
+  answer: string;
+  leadIntentScore: number;
+  meta: ReturnType<typeof getConversationMeta>;
+  identityState: 'unverified' | 'pending_match' | 'verified';
+  memoryLoaded: boolean;
+  verificationHint?: string;
+}): ChatResponse {
+  if (params.topicGuard !== 'allowed') {
+    return {
+      answer: params.answer,
+      topic: params.topicGuard,
+      leadIntentScore: params.topicGuard === 'disallowed' ? 0 : 20,
+      nextQuestion: scopeClarifyPrompt[params.locale],
+      requiresLeadCapture: false,
+      conversationStage: 'discovery',
+      missingFields: ['service_type', 'primary_goal'],
+      handoffReady: false,
+      identityState: params.identityState,
+      memoryLoaded: params.memoryLoaded,
+      verificationHint: params.verificationHint,
+      dialogMode: params.topicGuard === 'disallowed' ? 'disallowed' : 'scope_clarify'
+    };
+  }
+
+  return {
+    answer: params.answer,
+    topic: 'allowed',
+    leadIntentScore: params.leadIntentScore,
+    nextQuestion: params.meta.nextQuestion,
+    requiresLeadCapture: false,
+    conversationStage: params.meta.brief.conversationStage,
+    missingFields: params.meta.brief.missingFields,
+    handoffReady: params.meta.brief.handoffReady,
+    identityState: params.identityState,
+    memoryLoaded: params.memoryLoaded,
+    verificationHint: params.verificationHint,
+    dialogMode: 'context_continuation'
+  };
+}
+
+function buildGracefulFallbackResponse(params: {
   locale: Locale;
   message: string;
   history: ChatMessage[];
@@ -1224,6 +1457,7 @@ function fallbackAllowedReply(params: {
   verificationHint?: string;
   briefContext?: BriefContext;
   channel: 'web' | 'telegram' | 'instagram' | 'facebook' | 'whatsapp';
+  topicGuard: TopicGuard;
 }): ChatResponse {
   const meta = getConversationMeta({
     locale: params.locale,
@@ -1233,268 +1467,186 @@ function fallbackAllowedReply(params: {
     identityState: params.identityState,
     channel: params.channel
   });
-  const leadScoreBase = meta.highIntent ? 78 : 58;
-  const memoryLoaded = params.memoryLoaded ?? false;
   const currentTurnSignals = extractLeadSignals({history: [], message: params.message});
-  const lastAssistantAnswers = [...params.history]
-    .filter((item) => item.role === 'assistant')
-    .slice(-3)
-    .map((item) => item.content);
-
   const hasContact = Boolean(currentTurnSignals.normalizedEmail || currentTurnSignals.normalizedPhone || currentTurnSignals.telegramHandle);
   const hasTimeline = Boolean(currentTurnSignals.timelineHint);
-  const hasBudget = Boolean(currentTurnSignals.budgetHint);
-
-  let answer = '';
-  let signalType: 'contact' | 'timeline' | 'budget' | 'handoff' | 'progress' = 'progress';
-  if (params.locale === 'ru') {
-    if (hasContact) {
-      answer = meta.signals.name
-        ? `Спасибо, ${meta.signals.name}, контакт зафиксировал.`
-        : buildAlternativeAcknowledgement({
-            locale: 'ru',
-            signalType: 'contact',
-            recentAssistantAnswers: lastAssistantAnswers,
-            preferred: 'Спасибо, контакт зафиксировал.'
-          });
-      signalType = 'contact';
-    } else if (hasTimeline) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'ru',
-        signalType: 'timeline',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Принял, сроки запуска зафиксировал.'
-      });
-      signalType = 'timeline';
-    } else if (hasBudget) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'ru',
-        signalType: 'budget',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Принял, ориентир по бюджету зафиксировал.'
-      });
-      signalType = 'budget';
-    } else if (meta.brief.handoffReady) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'ru',
-        signalType: 'handoff',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Отлично, данных достаточно, передаю запрос менеджеру на оценку и следующий шаг.'
-      });
-      signalType = 'handoff';
-    } else {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'ru',
-        signalType: 'progress',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Понял задачу, двигаемся дальше по брифу.'
-      });
-      signalType = 'progress';
-    }
-  } else if (params.locale === 'uk') {
-    if (hasContact) {
-      answer = meta.signals.name
-        ? `Дякую, ${meta.signals.name}, контакт зафіксував.`
-        : buildAlternativeAcknowledgement({
-            locale: 'uk',
-            signalType: 'contact',
-            recentAssistantAnswers: lastAssistantAnswers,
-            preferred: 'Дякую, контакт зафіксував.'
-          });
-      signalType = 'contact';
-    } else if (hasTimeline) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'uk',
-        signalType: 'timeline',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Прийняв, строки запуску зафіксував.'
-      });
-      signalType = 'timeline';
-    } else if (hasBudget) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'uk',
-        signalType: 'budget',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Прийняв, орієнтир бюджету зафіксував.'
-      });
-      signalType = 'budget';
-    } else if (meta.brief.handoffReady) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'uk',
-        signalType: 'handoff',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Чудово, даних достатньо, передаю запит менеджеру на оцінку та наступний крок.'
-      });
-      signalType = 'handoff';
-    } else {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'uk',
-        signalType: 'progress',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Зрозумів запит, продовжуємо бриф.'
-      });
-      signalType = 'progress';
-    }
-  } else if (params.locale === 'sr-ME') {
-    if (hasContact) {
-      answer = meta.signals.name
-        ? `Hvala, ${meta.signals.name}, kontakt je zabilježen.`
-        : buildAlternativeAcknowledgement({
-            locale: 'sr-ME',
-            signalType: 'contact',
-            recentAssistantAnswers: lastAssistantAnswers,
-            preferred: 'Hvala, kontakt je zabilježen.'
-          });
-      signalType = 'contact';
-    } else if (hasTimeline) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'sr-ME',
-        signalType: 'timeline',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Rok lansiranja je zabilježen.'
-      });
-      signalType = 'timeline';
-    } else if (hasBudget) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'sr-ME',
-        signalType: 'budget',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Budžetski okvir je zabilježen.'
-      });
-      signalType = 'budget';
-    } else if (meta.brief.handoffReady) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'sr-ME',
-        signalType: 'handoff',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Odlično, imamo dovoljno podataka i predajem zahtjev menadžeru.'
-      });
-      signalType = 'handoff';
-    } else {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'sr-ME',
-        signalType: 'progress',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Razumijem zahtjev, nastavimo sa brief-om.'
-      });
-      signalType = 'progress';
-    }
-  } else {
-    if (hasContact) {
-      answer = meta.signals.name
-        ? `Thanks, ${meta.signals.name}, I have your contact.`
-        : buildAlternativeAcknowledgement({
-            locale: 'en',
-            signalType: 'contact',
-            recentAssistantAnswers: lastAssistantAnswers,
-            preferred: 'Thanks, I have your contact.'
-          });
-      signalType = 'contact';
-    } else if (hasTimeline) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'en',
-        signalType: 'timeline',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Got it, I noted the launch timeline.'
-      });
-      signalType = 'timeline';
-    } else if (hasBudget) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'en',
-        signalType: 'budget',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Got it, I noted the budget range.'
-      });
-      signalType = 'budget';
-    } else if (meta.brief.handoffReady) {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'en',
-        signalType: 'handoff',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Great, I have enough details and will hand this to a manager.'
-      });
-      signalType = 'handoff';
-    } else {
-      answer = buildAlternativeAcknowledgement({
-        locale: 'en',
-        signalType: 'progress',
-        recentAssistantAnswers: lastAssistantAnswers,
-        preferred: 'Understood, let us continue the brief.'
-      });
-      signalType = 'progress';
-    }
-  }
-
-  const verificationPart = params.verificationHint ? ` ${params.verificationHint}` : '';
-  let composed = trimForAnswer(`${answer}${verificationPart} ${meta.nextQuestion}`);
-  if (templateLikeAnswer(composed, lastAssistantAnswers)) {
-    composed = trimForAnswer(`${buildAlternativeAcknowledgement({
-      locale: params.locale,
-      signalType,
-      recentAssistantAnswers: lastAssistantAnswers,
-      preferred: answer
-    })}${verificationPart} ${meta.nextQuestion}`);
-  }
-  const personalizedAnswer = maybeAddressByName({
-    answer: composed,
+  const hasBudget = Boolean(currentTurnSignals.budgetHint) && !hasAmbiguousNumericBudgetContext(params.message);
+  const hasAreaWithoutBudget = hasAmbiguousNumericBudgetContext(params.message) && !hasBudget;
+  const nextQuestion = params.topicGuard === 'allowed' ? meta.nextQuestion : scopeClarifyPrompt[params.locale];
+  const base = buildGracefulFailAnswer({
+    locale: params.locale,
+    topicGuard: params.topicGuard,
+    message: params.message,
+    hasContact,
+    hasTimeline,
+    hasBudget,
+    hasAreaWithoutBudget,
+    handoffReady: meta.brief.handoffReady
+  });
+  const constrained = applyAnswerConstraints({
+    answer: base,
+    topicGuard: params.topicGuard,
+    locale: params.locale,
+    nextQuestion,
+    verificationHint: params.verificationHint,
+    handoffReady: params.topicGuard === 'allowed' && meta.brief.handoffReady
+  });
+  const recentAssistantAnswers = params.history
+    .filter((item) => item.role === 'assistant')
+    .slice(-2)
+    .map((item) => item.content);
+  const repetitionScore = maxSimilarityToRecent(constrained, recentAssistantAnswers);
+  const adjusted = repetitionScore >= REPLY_REPETITION_THRESHOLD
+    ? ensureTargetQuestion(getNonRepeatingLead(params.locale), nextQuestion)
+    : constrained;
+  const personalized = maybeAddressByName({
+    answer: adjusted,
     preferredName: meta.preferredName,
     history: params.history
   });
-  return {
-    answer: personalizedAnswer,
-    topic: 'allowed',
-    leadIntentScore: meta.brief.handoffReady || meta.highIntent
-      ? Math.max(leadScoreBase, meta.brief.completenessScore)
-      : Math.min(72, Math.max(leadScoreBase, Math.min(meta.brief.completenessScore, 72))),
-    nextQuestion: meta.nextQuestion,
-    requiresLeadCapture: false,
-    conversationStage: meta.brief.conversationStage,
-    missingFields: meta.brief.missingFields,
-    handoffReady: meta.brief.handoffReady,
+  return toScopedResponse({
+    locale: params.locale,
+    topicGuard: params.topicGuard,
+    answer: personalized,
+    leadIntentScore: computeLeadIntentScore({
+      normalizedScore: 0,
+      highIntent: meta.highIntent,
+      handoffReady: meta.brief.handoffReady,
+      completenessScore: meta.brief.completenessScore
+    }),
+    meta,
     identityState: params.identityState,
-    memoryLoaded,
-    verificationHint: params.verificationHint,
-    dialogMode: 'context_continuation'
-  };
+    memoryLoaded: params.memoryLoaded ?? false,
+    verificationHint: params.verificationHint
+  });
 }
 
-function unclearScopeReply(params: {
+export type LowCostContextReply = {
+  answer: string;
+  usedLlm: boolean;
+  fallbackModelUsed: boolean;
+  gracefulFailUsed: boolean;
+  rephraseUsed: boolean;
+};
+
+function buildLowCostGracefulAnswer(params: {
   locale: Locale;
-  identityState: 'unverified' | 'pending_match' | 'verified';
-  memoryLoaded: boolean;
-  verificationHint?: string;
-}): ChatResponse {
-  const verificationPart = params.verificationHint ? ` ${params.verificationHint}` : '';
-  const nextQuestion = scopeClarifyPrompt[params.locale];
-  return {
-    answer: trimForAnswer(`${nextQuestion}${verificationPart}`),
-    topic: 'unclear',
-    leadIntentScore: 20,
-    nextQuestion,
-    requiresLeadCapture: false,
-    conversationStage: 'discovery',
-    missingFields: ['service_type', 'primary_goal'],
-    handoffReady: false,
-    identityState: params.identityState,
-    memoryLoaded: params.memoryLoaded,
-    verificationHint: params.verificationHint,
-    dialogMode: 'scope_clarify'
-  };
+  message: string;
+  remainingMessages: number;
+}): string {
+  const snippet = buildMessageSnippet(params.message, 72);
+  if (params.locale === 'ru') {
+    return params.remainingMessages > 0
+      ? `Уточнение добавил в заявку: «${snippet}». Менеджер уже в работе, можно отправить ещё ${params.remainingMessages} уточнение.`
+      : `Уточнение добавил в заявку: «${snippet}». Менеджер уже в работе.`;
+  }
+  if (params.locale === 'uk') {
+    return params.remainingMessages > 0
+      ? `Уточнення додав до заявки: «${snippet}». Менеджер вже в роботі, можна надіслати ще ${params.remainingMessages} уточнення.`
+      : `Уточнення додав до заявки: «${snippet}». Менеджер вже в роботі.`;
+  }
+  if (params.locale === 'sr-ME') {
+    return params.remainingMessages > 0
+      ? `Pojašnjenje je dodato u zahtjev: "${snippet}". Menadžer je već u obradi, možete poslati još ${params.remainingMessages} pojašnjenje.`
+      : `Pojašnjenje je dodato u zahtjev: "${snippet}". Menadžer je već u obradi.`;
+  }
+  return params.remainingMessages > 0
+    ? `I added your clarification to the request: "${snippet}". A manager is already reviewing it, and you can send ${params.remainingMessages} more clarification.`
+    : `I added your clarification to the request: "${snippet}". A manager is already reviewing it.`;
 }
 
-function disallowedReply(locale: Locale, identityState: 'unverified' | 'pending_match' | 'verified', memoryLoaded: boolean): ChatResponse {
+export async function generateLowCostContextReply(params: {
+  locale: Locale;
+  message: string;
+  history: ChatMessage[];
+  remainingMessages: number;
+  conversationId?: string;
+}): Promise<LowCostContextReply> {
+  const recentAssistantAnswers = params.history
+    .filter((item) => item.role === 'assistant')
+    .slice(-2)
+    .map((item) => item.content);
+
+  const graceful = (): LowCostContextReply => ({
+    answer: trimForAnswer(buildLowCostGracefulAnswer(params)),
+    usedLlm: false,
+    fallbackModelUsed: false,
+    gracefulFailUsed: true,
+    rephraseUsed: false
+  });
+
+  if (!client) {
+    return graceful();
+  }
+
+  const userPrompt = [
+    `Locale=${params.locale}.`,
+    'You are in post-handoff clarification mode.',
+    `Remaining clarifications before pause=${params.remainingMessages}.`,
+    `Recent assistant replies:\n${recentAssistantAnswers.join('\n') || '(none)'}`,
+    `Current user message:\n${params.message}`,
+    'Write 1-2 concise human sentences.',
+    'Acknowledge that the clarification was added and manager is reviewing.',
+    'If remaining clarifications > 0, mention the exact number.',
+    'Avoid repeating opening words from recent assistant replies.'
+  ].join('\n\n');
+
+  const tryReply = async (model: string, stage: string): Promise<string | null> => {
+    return requestTextReply({
+      conversationId: params.conversationId,
+      model,
+      maxOutputTokens: Math.min(FALLBACK_MAX_OUTPUT_TOKENS, 180),
+      path: 'chat/message_low_cost',
+      stage,
+      messages: [
+        {role: 'system', content: 'Write natural client-facing acknowledgements. No canned templates. Max 2 sentences.'},
+        {role: 'developer', content: 'Do not output JSON or markdown. Return plain text only.'},
+        {role: 'user', content: userPrompt}
+      ]
+    });
+  };
+
+  let usedModel = FAST_MODEL;
+  let answer = await tryReply(FAST_MODEL, 'low_cost_primary');
+  let fallbackModelUsed = false;
+  if (!answer) {
+    fallbackModelUsed = true;
+    usedModel = FALLBACK_MODEL;
+    answer = await tryReply(FALLBACK_MODEL, 'low_cost_fallback');
+  }
+  if (!answer) {
+    return graceful();
+  }
+
+  let composed = trimForAnswer(answer);
+  const repetitionScore = maxSimilarityToRecent(composed, recentAssistantAnswers);
+  let rephraseUsed = false;
+  if (repetitionScore >= REPLY_REPETITION_THRESHOLD || templateLikeAnswer(composed, recentAssistantAnswers)) {
+    const rephrased = await requestTextReply({
+      conversationId: params.conversationId,
+      model: usedModel,
+      maxOutputTokens: REPHRASE_MAX_OUTPUT_TOKENS,
+      path: 'chat/message_low_cost',
+      stage: 'low_cost_rephrase',
+      messages: [
+        {role: 'system', content: 'Rewrite the answer to sound human and non-repetitive. Keep intent and locale.'},
+        {role: 'developer', content: 'Output plain text only. Keep it 1-2 short sentences.'},
+        {role: 'user', content: `Recent replies:\n${recentAssistantAnswers.join('\n') || '(none)'}\n\nOriginal answer:\n${composed}`}
+      ]
+    });
+    if (!rephrased) {
+      return graceful();
+    }
+    composed = trimForAnswer(rephrased);
+    rephraseUsed = true;
+  }
+
   return {
-    answer: disallowedFallback[locale],
-    topic: 'disallowed',
-    leadIntentScore: 0,
-    nextQuestion: disallowedFallback[locale],
-    requiresLeadCapture: false,
-    conversationStage: 'discovery',
-    missingFields: ['service_type'],
-    handoffReady: false,
-    identityState,
-    memoryLoaded,
-    dialogMode: 'disallowed'
+    answer: composed,
+    usedLlm: true,
+    fallbackModelUsed,
+    gracefulFailUsed: false,
+    rephraseUsed
   };
 }
 
@@ -1521,60 +1673,13 @@ export async function generateAgencyReply(params: {
     identityState,
     channel: params.channel
   });
-
-  if (!meta.conversationInScope) {
-    if (isClearlyOutOfScope(message)) {
-      return disallowedReply(replyLocale, identityState, memoryLoaded);
-    }
-    return unclearScopeReply({
-      locale: replyLocale,
-      identityState,
-      memoryLoaded,
-      verificationHint: params.verificationHint
-    });
-  }
-
-  if (!client) {
-    return fallbackAllowedReply({
-      ...params,
-      locale: replyLocale,
-      identityState
-    });
-  }
-
-  const model = chooseModel(message, meta.highIntent);
-  const systemPrompt = [
-    'You are SYSTEMA.WORKS sales manager AI for a digital agency.',
-    'Speak like a human consultant, not like a canned template.',
-    'Keep each answer concise: 2-4 short sentences and max one question.',
-    'When customer name is known, occasionally address by first name (about every 2-4 turns), not every message.',
-    'Acknowledge the exact user request before asking the next question.',
-    'Avoid repeating the same opening clause used in the last 1-2 assistant replies.',
-    'Do not repeat generic service lists every turn.',
-    'Collect a minimal brief for manager handoff: full_name, one contact (email/phone/telegram), service_type, primary_goal, and at least timeline or budget.',
-    'After core brief is complete, ask once where the customer heard about us.',
-    'Do not block handoff if referral source is still unknown after that one question.',
-    'Question priority: contact first, then service and primary goal, then timeline/budget.',
-    'If user explicitly asks to discuss project details first, continue project questions and avoid repeating contact request until project brief is captured (except high-intent urgent cases).',
-    'If serviceClarifyActive=true, ask only the provided serviceClarifyQuestion and do not jump to other discovery questions.',
-    'If user gives a short factual answer to your previous qualifying question, continue the thread without scope reset.',
-    'If user asks for call/estimate urgently and contact is present, treat as expedite handoff candidate.',
-    'Do not expose previous customer memory or personal data when identityState is unverified or pending_match.',
-    'Only discuss agency services (web/mobile, UI/UX implementation, automation, AI, SMM).',
-    'Reply in user current language when it is clear; fallback to session locale if uncertain.',
-    'Return JSON only with keys: answer, topic, leadIntentScore, nextQuestion, requiresLeadCapture.'
-  ].join(' ');
-
-  const developerPrompt = [
-    'Use provided context fields as source of truth.',
-    'Return strict JSON only; never include markdown.',
-    'Do not include additional keys.'
-  ].join(' ');
+  const topicGuard = getTopicGuard(message, meta.conversationInScope);
   const inputHistory = history.slice(-HISTORY_WINDOW).map((item) => `${item.role}: ${item.content}`).join('\n');
   const currentSignals = extractLeadSignals({history: [], message});
   const shouldBypassModel =
     params.channel === 'web' &&
     isShortFactReply(message) &&
+    !hasAmbiguousNumericBudgetContext(message) &&
     isQualificationQuestion(getLastAssistantQuestion(history)) &&
     (Boolean(currentSignals.normalizedEmail) ||
       Boolean(currentSignals.normalizedPhone) ||
@@ -1582,193 +1687,244 @@ export async function generateAgencyReply(params: {
       Boolean(currentSignals.timelineHint) ||
       Boolean(currentSignals.budgetHint) ||
       meta.brief.handoffReady);
-  if (shouldBypassModel) {
-    return fallbackAllowedReply({
+
+  if (!client) {
+    return buildGracefulFallbackResponse({
       ...params,
       locale: replyLocale,
-      identityState
+      identityState,
+      topicGuard
     });
   }
 
-  const requestModelReply = async (retryInstruction?: string) => {
-    const startedAt = Date.now();
-    const userPrompt = [
-      `Session locale=${locale}. Preferred reply locale=${replyLocale}.`,
-      `Current missing brief fields: ${meta.brief.missingFields.join(', ') || 'none'}.`,
-      `serviceClarifyActive=${meta.serviceClarifyActive}. serviceFamily=${meta.serviceFamily}. serviceDetailScore=${meta.serviceDetailScore}.`,
-      `serviceClarifyQuestion=${meta.serviceClarifyNextQuestion ?? 'none'}.`,
-      `identityState=${identityState}. memoryLoaded=${memoryLoaded}.`,
-      `verificationHint=${params.verificationHint ?? 'none'}.`,
-      `briefContext=${JSON.stringify({
-        serviceType: meta.mergedDraft.serviceType,
-        primaryGoal: meta.mergedDraft.primaryGoal,
-        timelineHint: meta.mergedDraft.timelineHint,
-        budgetHint: meta.mergedDraft.budgetHint,
-        referralSource: meta.mergedDraft.referralSource,
-        hasConversationContact: params.briefContext?.hasConversationContact ?? false
-      })}`,
-      `Conversation context:\n${inputHistory}`,
-      `Current user message:\n${message}`,
-      retryInstruction ? `Retry instruction:\n${retryInstruction}` : '',
-      'Return JSON only.'
-    ].filter(Boolean).join('\n\n');
+  const primaryModel = shouldBypassModel ? FAST_MODEL : chooseModel(message, meta.highIntent);
+  const primaryMaxOutputTokens = shouldBypassModel ? Math.min(REPLY_MAX_OUTPUT_TOKENS, 180) : REPLY_MAX_OUTPUT_TOKENS;
+  const systemPrompt = [
+    'You are SYSTEMA.WORKS sales manager AI for a digital agency.',
+    'Speak like a human consultant, not like a canned template.',
+    'Keep each answer concise: 2-4 short sentences and max one question.',
+    'Acknowledge the exact user request before asking the next question.',
+    'Do not repeat opening clauses from the previous 2 assistant replies.',
+    'Do not repeat generic service lists.',
+    'If topicGuard is "allowed", stay in allowed scope and keep conversation forward-moving.',
+    'If topicGuard is "unclear", ask to clarify concrete project scope.',
+    'If topicGuard is "disallowed", politely redirect to allowed digital agency scope.',
+    'Return JSON only with keys: answer, topic, leadIntentScore, nextQuestion, requiresLeadCapture.'
+  ].join(' ');
+  const developerPrompt = [
+    'Use provided context fields as source of truth.',
+    'Return strict JSON only; never include markdown.',
+    'Do not include additional keys.'
+  ].join(' ');
 
-    const completion = await client.chat.completions.create({
+  const buildUserPrompt = (retryInstruction?: string) => [
+    `Session locale=${locale}. Preferred reply locale=${replyLocale}.`,
+    `topicGuard=${topicGuard}.`,
+    `Current missing brief fields: ${meta.brief.missingFields.join(', ') || 'none'}.`,
+    `serviceClarifyActive=${meta.serviceClarifyActive}. serviceFamily=${meta.serviceFamily}. serviceDetailScore=${meta.serviceDetailScore}.`,
+    `serviceClarifyQuestion=${meta.serviceClarifyNextQuestion ?? 'none'}.`,
+    `identityState=${identityState}. memoryLoaded=${memoryLoaded}.`,
+    `verificationHint=${params.verificationHint ?? 'none'}.`,
+    `deterministicNextQuestion=${meta.nextQuestion}.`,
+    `briefContext=${JSON.stringify({
+      serviceType: meta.mergedDraft.serviceType,
+      primaryGoal: meta.mergedDraft.primaryGoal,
+      timelineHint: meta.mergedDraft.timelineHint,
+      budgetHint: meta.mergedDraft.budgetHint,
+      referralSource: meta.mergedDraft.referralSource,
+      hasConversationContact: params.briefContext?.hasConversationContact ?? false
+    })}`,
+    `Conversation context:\n${inputHistory}`,
+    `Current user message:\n${message}`,
+    retryInstruction ? `Retry instruction:\n${retryInstruction}` : '',
+    'Return JSON only.'
+  ].filter(Boolean).join('\n\n');
+
+  const attemptStructured = async (model: string, maxOutputTokens: number, stage: string, retryInstruction?: string) => {
+    return requestStructuredReply({
+      conversationId: params.conversationId,
       model,
-      messages: [
-        {role: 'system', content: systemPrompt},
-        {role: 'developer', content: developerPrompt},
-        {
-          role: 'user',
-          content: userPrompt
-        }
-      ],
-      max_completion_tokens: REPLY_MAX_OUTPUT_TOKENS
-    });
-    const usage = completion.usage;
-    console.info('[ai] OpenAI usage', {
+      maxOutputTokens,
+      systemPrompt,
+      developerPrompt,
+      userPrompt: buildUserPrompt(retryInstruction),
       path: 'chat/message',
-      conversationId: params.conversationId ?? 'unknown',
-      model,
-      inputTokens: usage?.prompt_tokens ?? null,
-      outputTokens: usage?.completion_tokens ?? null,
-      totalTokens: usage?.total_tokens ?? null,
-      requestId: (completion as {_request_id?: string})._request_id ?? null,
-      latencyMs: Date.now() - startedAt,
-      retried: Boolean(retryInstruction)
+      stage
     });
-    const content = completion.choices[0]?.message?.content ?? '';
-    const parsed = safeJsonParse(content);
-    return aiReplySchema.safeParse(parsed);
   };
-
-  let validated: ReturnType<typeof aiReplySchema.safeParse>;
-  try {
-    validated = await requestModelReply();
-  } catch (error) {
-    if (isRecoverableOpenAiError(error)) {
-      if (error instanceof OpenAI.APIError) {
-        console.warn('[ai] OpenAI recoverable error, using fallback', {
-          status: error.status,
-          code: error.code,
-          requestId: error.requestID
-        });
-      } else {
-        console.warn('[ai] OpenAI connection/server error, using fallback');
-      }
-      return fallbackAllowedReply({
-        ...params,
-        locale: replyLocale,
-        identityState
-      });
-    }
-    throw error;
-  }
-
-  if (!validated.success) {
-    return fallbackAllowedReply({
-      ...params,
-      locale: replyLocale,
-      identityState
-    });
-  }
 
   const lastAssistantAnswers = [...history]
     .filter((item) => item.role === 'assistant')
     .slice(-2)
     .map((item) => item.content);
 
-  let modelReply = validated.data;
-  let answer = trimForAnswer(modelReply.answer);
-  if (shouldRetryTemplateAnswer({
-    answer,
-    lastAssistantAnswers,
-    highIntent: meta.highIntent,
-    handoffReady: meta.brief.handoffReady,
-    message
-  })) {
-    try {
-      const retried = await requestModelReply(
-        'Your previous answer looked generic or repetitive. Continue exact thread context, avoid generic service list, and ask one targeted next question.'
+  try {
+    let fallbackModelUsed = false;
+    let gracefulFailUsed = false;
+    let rephraseUsed = false;
+    let templateBlockTriggered = false;
+
+    const primaryAttempt = await attemptStructured(primaryModel, primaryMaxOutputTokens, 'primary');
+    let parsedReply = primaryAttempt?.parsed.success ? primaryAttempt.parsed.data : null;
+    let modelUsed = primaryModel;
+
+    if (!parsedReply) {
+      fallbackModelUsed = true;
+      const fallbackAttempt = await attemptStructured(
+        FALLBACK_MODEL,
+        Math.max(FALLBACK_MAX_OUTPUT_TOKENS, primaryMaxOutputTokens),
+        'fallback_model'
       );
-      if (!retried.success) {
-        return fallbackAllowedReply({
-          ...params,
-          locale: replyLocale,
-          identityState
-        });
-      }
-      const retryAnswer = trimForAnswer(retried.data.answer);
-      if (templateLikeAnswer(retryAnswer, lastAssistantAnswers)) {
-        return fallbackAllowedReply({
-          ...params,
-          locale: replyLocale,
-          identityState
-        });
-      }
-      modelReply = retried.data;
-      answer = retryAnswer;
-    } catch (error) {
-      if (isRecoverableOpenAiError(error)) {
-        return fallbackAllowedReply({
-          ...params,
-          locale: replyLocale,
-          identityState
-        });
-      }
-      throw error;
+      parsedReply = fallbackAttempt?.parsed.success ? fallbackAttempt.parsed.data : null;
+      modelUsed = FALLBACK_MODEL;
     }
-  }
 
-  const normalizedScore = Math.max(0, Math.min(100, Math.round(modelReply.leadIntentScore)));
-  let leadIntentScore = Math.max(normalizedScore, meta.highIntent ? 72 : 0, meta.brief.completenessScore >= 80 ? 65 : 0);
-  if (!meta.brief.handoffReady && !meta.highIntent) {
-    leadIntentScore = Math.min(72, leadIntentScore);
-  }
-
-  let composedAnswer = trimForAnswer(answer);
-  if (params.verificationHint) {
-    composedAnswer = trimForAnswer(`${composedAnswer} ${params.verificationHint}`);
-  }
-  if (meta.referralPromptRequired) {
-    composedAnswer = ensureTargetQuestion(composedAnswer, meta.nextQuestion);
-  } else if (meta.serviceClarifyNextQuestion || meta.contactDeferralActive) {
-    composedAnswer = ensureTargetQuestion(composedAnswer, meta.nextQuestion);
-  } else if (!meta.brief.handoffReady && !hasQuestion(composedAnswer)) {
-    composedAnswer = trimForAnswer(`${composedAnswer} ${meta.nextQuestion}`);
-  }
-  if (meta.brief.handoffReady) {
-    const low = composedAnswer.toLowerCase();
-    const mentionsHandoff = low.includes('manager') || low.includes('менеджер') || low.includes('менеджеру');
-    if (!mentionsHandoff) {
-      composedAnswer = trimForAnswer(`${composedAnswer} ${handoffNotice(replyLocale)}`);
+    if (!parsedReply) {
+      gracefulFailUsed = true;
+      const graceful = buildGracefulFallbackResponse({
+        ...params,
+        locale: replyLocale,
+        identityState,
+        topicGuard
+      });
+      console.info('[ai] reply summary', {
+        path: 'chat/message',
+        conversationId: params.conversationId ?? 'unknown',
+        model: modelUsed,
+        fallbackModelUsed,
+        gracefulFailUsed,
+        rephraseUsed,
+        repetitionScore: null,
+        template_block_triggered: true
+      });
+      return graceful;
     }
-  }
-  if (templateLikeAnswer(composedAnswer, lastAssistantAnswers)) {
-    composedAnswer = trimForAnswer(`${buildAlternativeAcknowledgement({
+
+    const normalizedTopic: TopicGuard = topicGuard === 'allowed' ? 'allowed' : topicGuard;
+    const normalizedScore = Math.max(0, Math.min(100, Math.round(parsedReply.leadIntentScore)));
+    const leadIntentScore = computeLeadIntentScore({
+      normalizedScore,
+      highIntent: meta.highIntent,
+      handoffReady: meta.brief.handoffReady,
+      completenessScore: meta.brief.completenessScore
+    });
+    let composedAnswer = applyAnswerConstraints({
+      answer: parsedReply.answer,
+      topicGuard: normalizedTopic,
       locale: replyLocale,
-      signalType: 'progress',
-      recentAssistantAnswers: lastAssistantAnswers
-    })} ${meta.nextQuestion}`);
-  }
-  composedAnswer = maybeAddressByName({
-    answer: composedAnswer,
-    preferredName: meta.preferredName,
-    history
-  });
+      nextQuestion: meta.nextQuestion,
+      verificationHint: params.verificationHint,
+      handoffReady: normalizedTopic === 'allowed' && meta.brief.handoffReady
+    });
 
-  return {
-    answer: composedAnswer,
-    topic: modelReply.topic === 'disallowed' ? 'allowed' : modelReply.topic,
-    leadIntentScore,
-    nextQuestion: meta.nextQuestion,
-    requiresLeadCapture: false,
-    conversationStage: meta.brief.conversationStage,
-    missingFields: meta.brief.missingFields,
-    handoffReady: meta.brief.handoffReady,
-    identityState,
-    memoryLoaded,
-    verificationHint: params.verificationHint,
-    dialogMode: 'context_continuation'
-  };
+    const similarityScore = maxSimilarityToRecent(composedAnswer, lastAssistantAnswers);
+    const shouldRephrase = similarityScore >= REPLY_REPETITION_THRESHOLD
+      || shouldRetryTemplateAnswer({
+        answer: composedAnswer,
+        lastAssistantAnswers,
+        highIntent: meta.highIntent,
+        handoffReady: meta.brief.handoffReady,
+        message
+      });
+    templateBlockTriggered = shouldRephrase;
+
+    if (shouldRephrase) {
+      const rephrased = await requestTextReply({
+        conversationId: params.conversationId,
+        model: modelUsed,
+        maxOutputTokens: REPHRASE_MAX_OUTPUT_TOKENS,
+        path: 'chat/message',
+        stage: 'rephrase',
+        messages: [
+          {role: 'system', content: 'Rewrite assistant reply to be natural and non-repetitive while preserving intent and locale.'},
+          {role: 'developer', content: 'Output plain text only. Keep 2-4 short sentences and max one question.'},
+          {
+            role: 'user',
+            content: [
+              `Recent assistant replies:\n${lastAssistantAnswers.join('\n') || '(none)'}`,
+              `Current reply:\n${composedAnswer}`,
+              `Target question (must remain): ${normalizedTopic === 'allowed' ? meta.nextQuestion : scopeClarifyPrompt[replyLocale]}`,
+              'Do not use canned phrasing.'
+            ].join('\n\n')
+          }
+        ]
+      });
+      if (!rephrased) {
+        gracefulFailUsed = true;
+        const graceful = buildGracefulFallbackResponse({
+          ...params,
+          locale: replyLocale,
+          identityState,
+          topicGuard: normalizedTopic
+        });
+        console.info('[ai] reply summary', {
+          path: 'chat/message',
+          conversationId: params.conversationId ?? 'unknown',
+          model: modelUsed,
+          fallbackModelUsed,
+          gracefulFailUsed,
+          rephraseUsed,
+          repetitionScore: similarityScore,
+          template_block_triggered: templateBlockTriggered
+        });
+        return graceful;
+      }
+      rephraseUsed = true;
+      composedAnswer = applyAnswerConstraints({
+        answer: rephrased,
+        topicGuard: normalizedTopic,
+        locale: replyLocale,
+        nextQuestion: meta.nextQuestion,
+        verificationHint: params.verificationHint,
+        handoffReady: normalizedTopic === 'allowed' && meta.brief.handoffReady
+      });
+    }
+
+    composedAnswer = maybeAddressByName({
+      answer: composedAnswer,
+      preferredName: meta.preferredName,
+      history
+    });
+
+    console.info('[ai] reply summary', {
+      path: 'chat/message',
+      conversationId: params.conversationId ?? 'unknown',
+      model: modelUsed,
+      fallbackModelUsed,
+      gracefulFailUsed,
+      rephraseUsed,
+      repetitionScore: similarityScore,
+      template_block_triggered: templateBlockTriggered
+    });
+
+    return toScopedResponse({
+      locale: replyLocale,
+      topicGuard: normalizedTopic,
+      answer: composedAnswer,
+      leadIntentScore,
+      meta,
+      identityState,
+      memoryLoaded,
+      verificationHint: params.verificationHint
+    });
+  } catch (error) {
+    if (isRecoverableOpenAiError(error)) {
+      return buildGracefulFallbackResponse({
+        ...params,
+        locale: replyLocale,
+        identityState,
+        topicGuard
+      });
+    }
+    console.error('[ai] Unexpected error in generateAgencyReply, returning graceful fallback', {
+      conversationId: params.conversationId ?? 'unknown',
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return buildGracefulFallbackResponse({
+      ...params,
+      locale: replyLocale,
+      identityState,
+      topicGuard
+    });
+  }
 }

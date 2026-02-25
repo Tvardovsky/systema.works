@@ -129,6 +129,26 @@ describe('extractLeadSignals', () => {
     expect(result.budgetNormalized).toBeNull();
   });
 
+  it('does not treat area values as budget without explicit budget markers', () => {
+    const result = extractLeadSignals({
+      history: [],
+      message: 'В собственности участок чуть менее 3000 м², дома 120-200 м², нужен лендинг по проекту'
+    });
+
+    expect(result.serviceType).toBe('landing_website');
+    expect(result.budgetHint).toBeNull();
+    expect(result.budgetNormalized).toBeNull();
+  });
+
+  it('keeps budget when area context also includes explicit budget marker', () => {
+    const result = extractLeadSignals({
+      history: [],
+      message: 'Участок 3000 м², бюджет проекта 50 000 EUR'
+    });
+
+    expect(result.budgetNormalized).toBe('EUR 50000');
+  });
+
   it('parses no-deadline and asap timeline in multiple languages', () => {
     const ruNoDeadline = extractLeadSignals({
       history: [],

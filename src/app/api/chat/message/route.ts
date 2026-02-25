@@ -1,6 +1,7 @@
 import {NextRequest, NextResponse} from 'next/server';
 import {randomUUID} from 'crypto';
 import {chatMessageSchema} from '@/lib/schemas';
+import type {ChatMessage} from '@/types/lead';
 import {
   appendConversationMessage,
   appendLeadBriefRevision,
@@ -18,8 +19,9 @@ import {
   upsertLeadBrief
 } from '@/lib/repositories/omnichannel';
 import {enforceRateLimit, getClientIp, verifyTurnstile} from '@/lib/security';
+import {generateLowCostContextReply} from '@/lib/ai';
 import {handleInboundEvent} from '@/lib/orchestrator';
-import {extractLeadSignals} from '@/lib/lead-signals';
+import {extractBriefSignals} from '@/lib/brief-extractor';
 import {computeLeadBriefState} from '@/lib/lead-brief';
 import {extractPathFromReferer, extractServerClientSignal} from '@/lib/client-telemetry';
 import {
@@ -37,7 +39,6 @@ import {
   buildLockedLifecycle,
   buildLowCostLifecycle,
   getLockedMessage,
-  getLowCostAckMessage,
   getRetryAfterSeconds,
   isLifecycleLocked,
   mergeWebChatLifecycleMetadata,
@@ -125,6 +126,36 @@ function buildSafetyResponsePayload(params: {
   };
 }
 
+export async function buildLowCostAssistantAnswer(params: {
+  locale: 'en' | 'sr-ME' | 'ru' | 'uk';
+  message: string;
+  history: ChatMessage[];
+  remainingLowCostMessages: number;
+  chatLocked: boolean;
+  retryAfterSeconds: number;
+  conversationId: string;
+}) {
+  const lowCostReply = await generateLowCostContextReply({
+    locale: params.locale,
+    message: params.message,
+    history: params.history,
+    remainingMessages: Math.max(0, params.remainingLowCostMessages),
+    conversationId: params.conversationId
+  });
+
+  const answer = params.chatLocked
+    ? `${lowCostReply.answer} ${getLockedMessage(params.locale, params.retryAfterSeconds)}`
+    : lowCostReply.answer;
+
+  return {
+    answer: answer.trim(),
+    llmBypassed: !lowCostReply.usedLlm,
+    fallbackModelUsed: lowCostReply.fallbackModelUsed,
+    gracefulFailUsed: lowCostReply.gracefulFailUsed,
+    rephraseUsed: lowCostReply.rephraseUsed
+  };
+}
+
 async function handleLowCostWebMessage(params: {
   conversation: NonNullable<Awaited<ReturnType<typeof getConversationById>>>;
   message: string;
@@ -151,35 +182,39 @@ async function handleLowCostWebMessage(params: {
     .filter((row) => row.role === 'user' || row.role === 'assistant')
     .map((row) => ({role: row.role as 'user' | 'assistant', content: row.content}));
 
-  const capturedSignals = extractLeadSignals({
+  const briefExtraction = await extractBriefSignals({
+    locale: params.locale,
+    message: params.message,
     history,
-    message: params.message
+    conversationId: params.conversation.id
   });
+  const capturedSignals = briefExtraction.fields;
+  const llmExtractionBypassed = briefExtraction.deterministicFallback;
 
-  if (capturedSignals.name || capturedSignals.normalizedEmail || capturedSignals.normalizedPhone || capturedSignals.telegramHandle) {
+  if (capturedSignals.fullName || capturedSignals.email || capturedSignals.phone || capturedSignals.telegramHandle) {
     const claimStatus = params.conversation.identity_state === 'verified' ? 'verified' : 'captured';
     try {
       await touchCustomerContacts({
         customerId: params.conversation.customer_id,
-        fullName: capturedSignals.name ?? undefined,
-        email: capturedSignals.normalizedEmail ?? undefined,
-        phone: capturedSignals.normalizedPhone ?? undefined,
+        fullName: capturedSignals.fullName ?? undefined,
+        email: capturedSignals.email ?? undefined,
+        phone: capturedSignals.phone ?? undefined,
         locale: params.locale
       });
       await touchIdentityContacts({
         customerId: params.conversation.customer_id,
         channel: 'web',
         channelUserId: params.conversation.channel_user_id ?? params.conversation.id,
-        email: capturedSignals.normalizedEmail ?? undefined,
-        phone: capturedSignals.normalizedPhone ?? undefined,
+        email: capturedSignals.email ?? undefined,
+        phone: capturedSignals.phone ?? undefined,
         telegramHandle: capturedSignals.telegramHandle ?? undefined
       });
       await captureIdentityClaims({
         conversationId: params.conversation.id,
         customerId: params.conversation.customer_id,
         sourceChannel: 'web',
-        email: capturedSignals.normalizedEmail ?? null,
-        phone: capturedSignals.normalizedPhone ?? null,
+        email: capturedSignals.email ?? null,
+        phone: capturedSignals.phone ?? null,
         telegramHandle: capturedSignals.telegramHandle ?? null,
         status: claimStatus
       });
@@ -189,9 +224,9 @@ async function handleLowCostWebMessage(params: {
   }
 
   const mergedBrief = {
-    fullName: existingBrief?.fullName ?? capturedSignals.name ?? null,
-    email: existingBrief?.email ?? capturedSignals.normalizedEmail ?? null,
-    phone: existingBrief?.phone ?? capturedSignals.normalizedPhone ?? null,
+    fullName: existingBrief?.fullName ?? capturedSignals.fullName ?? null,
+    email: existingBrief?.email ?? capturedSignals.email ?? null,
+    phone: existingBrief?.phone ?? capturedSignals.phone ?? null,
     telegramHandle: existingBrief?.telegramHandle ?? capturedSignals.telegramHandle ?? null,
     serviceType: capturedSignals.serviceType ?? existingBrief?.serviceType ?? null,
     primaryGoal: preferRichText(existingBrief?.primaryGoal ?? null, capturedSignals.primaryGoal, 16),
@@ -259,7 +294,6 @@ async function handleLowCostWebMessage(params: {
   let cooldownUntil: string | undefined;
   let retryAfterSeconds = 0;
   let remainingLowCostMessages = Math.max(0, nextLifecycle.windowLimit - nextLifecycle.lowCostMessagesInWindow);
-  let answer = getLowCostAckMessage(params.locale, remainingLowCostMessages);
 
   if (reachedWindowLimit) {
     nextLifecycle = buildLockedLifecycle(new Date(), nextLifecycle);
@@ -268,8 +302,18 @@ async function handleLowCostWebMessage(params: {
     cooldownUntil = nextLifecycle.cooldownUntil ?? undefined;
     retryAfterSeconds = getRetryAfterSeconds(nextLifecycle.cooldownUntil);
     remainingLowCostMessages = nextLifecycle.windowLimit;
-    answer = `${getLowCostAckMessage(params.locale, 0)} ${getLockedMessage(params.locale, retryAfterSeconds)}`;
   }
+
+  const lowCostAssistant = await buildLowCostAssistantAnswer({
+    locale: params.locale,
+    message: params.message,
+    history,
+    remainingLowCostMessages: chatLocked ? 0 : remainingLowCostMessages,
+    chatLocked,
+    retryAfterSeconds,
+    conversationId: params.conversation.id
+  });
+  const answer = lowCostAssistant.answer;
 
   await updateConversationMetadata({
     conversationId: params.conversation.id,
@@ -285,7 +329,11 @@ async function handleLowCostWebMessage(params: {
     content: answer,
     metadata: {
       chatMode,
-      llmBypassed: true,
+      llmBypassed: lowCostAssistant.llmBypassed,
+      llmExtractionBypassed,
+      fallbackModelUsed: lowCostAssistant.fallbackModelUsed,
+      gracefulFailUsed: lowCostAssistant.gracefulFailUsed,
+      rephraseUsed: lowCostAssistant.rephraseUsed,
       chatLocked,
       cooldownUntil: cooldownUntil ?? null,
       retryAfterSeconds: retryAfterSeconds || null
@@ -301,6 +349,11 @@ async function handleLowCostWebMessage(params: {
     payload: {
       channel: 'web',
       lowCostMode: true,
+      llmBypassed: lowCostAssistant.llmBypassed,
+      llmExtractionBypassed,
+      fallbackModelUsed: lowCostAssistant.fallbackModelUsed,
+      gracefulFailUsed: lowCostAssistant.gracefulFailUsed,
+      rephraseUsed: lowCostAssistant.rephraseUsed,
       chatMode,
       chatLocked,
       cooldownUntil: cooldownUntil ?? null,
@@ -327,7 +380,12 @@ async function handleLowCostWebMessage(params: {
     chatMode,
     cooldownUntil,
     retryAfterSeconds: retryAfterSeconds || undefined,
-    remainingLowCostMessages
+    remainingLowCostMessages,
+    llmExtractionBypassed,
+    llmBypassed: lowCostAssistant.llmBypassed,
+    fallbackModelUsed: lowCostAssistant.fallbackModelUsed,
+    gracefulFailUsed: lowCostAssistant.gracefulFailUsed,
+    rephraseUsed: lowCostAssistant.rephraseUsed
   };
 }
 

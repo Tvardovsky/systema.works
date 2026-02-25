@@ -150,6 +150,17 @@ function cleanTextValue(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function shouldUseMobileScrollLock(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  const pointerCoarse = window.matchMedia('(pointer: coarse)').matches;
+  const hoverNone = window.matchMedia('(hover: none)').matches;
+  const narrowViewport = window.matchMedia('(max-width: 980px)').matches;
+  const touchPoints = typeof navigator !== 'undefined' ? (navigator.maxTouchPoints ?? 0) : 0;
+  return pointerCoarse || hoverNone || touchPoints > 0 || narrowViewport;
+}
+
 export function ChatWidget() {
   const t = useTranslations('Chat');
   const locale = useLocale() as Locale;
@@ -171,10 +182,13 @@ export function ChatWidget() {
   const [startingSession, setStartingSession] = useState(false);
   const attemptedRestoreRef = useRef(false);
   const sessionStartInFlightRef = useRef(false);
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const messageSequenceRef = useRef(0);
   const clientHintsRef = useRef<StartSessionClientHints | undefined>(undefined);
   const scrollLockSnapshotRef = useRef<ScrollLockSnapshot | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
+  const touchScrollableRef = useRef<HTMLElement | null>(null);
 
   const createMessage = useCallback((role: ChatMessage['role'], content: string): ChatMessage => {
     messageSequenceRef.current += 1;
@@ -350,7 +364,7 @@ export function ChatWidget() {
     if (typeof window === 'undefined') {
       return;
     }
-    const shouldLockBackgroundScroll = window.matchMedia('(max-width: 980px)').matches;
+    const shouldLockBackgroundScroll = shouldUseMobileScrollLock();
     if (!open) {
       unlockBackgroundScroll();
       return;
@@ -386,7 +400,74 @@ export function ChatWidget() {
       html.style.overflow = 'hidden';
       html.style.overscrollBehavior = 'none';
     }
-    return unlockBackgroundScroll;
+    const resolveTouchScrollable = (target: EventTarget | null): HTMLElement | null => {
+      const chatLog = chatLogRef.current;
+      if (!chatLog || !(target instanceof Element)) {
+        return null;
+      }
+      const inLog = target.closest('.chat-log');
+      if (!inLog || inLog !== chatLog) {
+        return null;
+      }
+      if (chatLog.scrollHeight <= chatLog.clientHeight + 1) {
+        return null;
+      }
+      return chatLog;
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      touchStartYRef.current = event.touches[0]?.clientY ?? null;
+      touchScrollableRef.current = resolveTouchScrollable(event.target);
+    };
+
+    const resetTouchTracking = () => {
+      touchStartYRef.current = null;
+      touchScrollableRef.current = null;
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      const chatLog = touchScrollableRef.current;
+      if (!chatLog) {
+        event.preventDefault();
+        return;
+      }
+      const touchY = event.touches[0]?.clientY;
+      const startY = touchStartYRef.current;
+      if (touchY == null || startY == null) {
+        return;
+      }
+      const maxScrollTop = Math.max(0, chatLog.scrollHeight - chatLog.clientHeight);
+      if (maxScrollTop <= 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const deltaY = touchY - startY;
+      const atTop = chatLog.scrollTop <= 0;
+      const atBottom = chatLog.scrollTop >= maxScrollTop - 1;
+      const pullingDown = deltaY > 0;
+      const pushingUp = deltaY < 0;
+      if ((pullingDown && atTop) || (pushingUp && atBottom)) {
+        event.preventDefault();
+        return;
+      }
+
+      touchStartYRef.current = touchY;
+    };
+
+    document.addEventListener('touchstart', onTouchStart, {passive: true});
+    document.addEventListener('touchmove', onTouchMove, {passive: false});
+    document.addEventListener('touchend', resetTouchTracking, {passive: true});
+    document.addEventListener('touchcancel', resetTouchTracking, {passive: true});
+
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', resetTouchTracking);
+      document.removeEventListener('touchcancel', resetTouchTracking);
+      resetTouchTracking();
+      unlockBackgroundScroll();
+    };
   }, [open, unlockBackgroundScroll]);
 
   useEffect(() => {
@@ -540,7 +621,7 @@ export function ChatWidget() {
           ) : null}
 
           {messages.length > 0 || loading ? (
-            <div className="chat-log" role="log" aria-live="polite" aria-relevant="additions text">
+            <div ref={chatLogRef} className="chat-log" role="log" aria-live="polite" aria-relevant="additions text">
               {messages.map((item) => (
                 <div key={item.id} className={`chat-row chat-row-${item.role}`}>
                   <p className={`chat-message chat-message-enter ${item.role}`}>

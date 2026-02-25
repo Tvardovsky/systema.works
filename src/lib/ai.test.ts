@@ -164,6 +164,24 @@ describe('generateAgencyReply contact follow-up logic', () => {
     expect(result.answer.toLowerCase()).not.toContain('я помогаю только в рамках услуг агентства');
   });
 
+  it('does not acknowledge budget for area-only numeric context', async () => {
+    const result = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Участок 3000 м², дома от 120 до 200 м², нужен лендинг',
+      history: [],
+      identityState: 'unverified',
+      channel: 'web',
+      briefContext: {
+        serviceType: 'landing_website',
+        primaryGoal: 'Запуск проекта и продажи',
+        hasConversationContact: true
+      }
+    });
+
+    expect(result.answer.toLowerCase()).not.toContain('бюджет');
+    expect(result.answer.toLowerCase()).not.toContain('ориентир по бюджету зафиксировал');
+  });
+
   it('uses different contextual fallback acknowledgements for contact and timeline messages', async () => {
     const history: ChatMessage[] = [
       {role: 'assistant', content: getIdentityRequestPrompt('ru')}
@@ -292,6 +310,19 @@ describe('generateAgencyReply contact follow-up logic', () => {
     });
 
     expect(result.answer.startsWith('Понял задачу, двигаемся дальше по брифу.')).toBeFalse();
+  });
+
+  it('does not use legacy canned low-context opening in fallback path', async () => {
+    const result = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Нужен сайт и чат-ассистент для агентства недвижимости',
+      history: [],
+      identityState: 'unverified',
+      channel: 'web'
+    });
+
+    expect(result.answer).not.toContain('Понял задачу, двигаемся дальше по брифу.');
+    expect(result.answer).not.toContain('Принял контекст, продолжим уточнения.');
   });
 
   it('asks service-clarify step2 after step1 context is captured', async () => {
