@@ -47,8 +47,14 @@ const NAME_PATTERNS: RegExp[] = [
 
 const SERVICE_MAP: Array<{type: string; hints: string[]}> = [
   {type: 'landing_website', hints: ['landing', 'website', 'site', 'лендинг', 'сайт', 'лендінг', 'sajt']},
-  {type: 'web_app', hints: ['web app', 'dashboard', 'portal', 'веб-прилож', 'кабинет', 'портал', 'web aplikac']},
-  {type: 'mobile_app', hints: ['mobile', 'ios', 'android', 'мобиль', 'мобайл', 'додаток', 'aplikac']},
+  {
+    type: 'web_app',
+    hints: [
+      'web app', 'dashboard', 'portal', 'веб-прилож', 'кабинет', 'портал', 'web aplikac',
+      'application', 'приложен', 'застосунк', 'aplikac'
+    ]
+  },
+  {type: 'mobile_app', hints: ['mobile', 'ios', 'android', 'мобиль', 'мобайл', 'додаток']},
   {
     type: 'branding_logo',
     hints: [
@@ -364,6 +370,9 @@ function detectServiceType(textLower: string): string | null {
     if (includesAny(textLower, entry.hints)) {
       return entry.type;
     }
+  }
+  if (/\bapp\b/i.test(textLower)) {
+    return 'web_app';
   }
   return null;
 }

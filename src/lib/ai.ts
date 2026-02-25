@@ -79,6 +79,14 @@ const primaryGoalPrompt: Record<Locale, string> = {
   uk: 'Який бізнес-результат ви хочете отримати в першу чергу?'
 };
 
+const PROJECT_DISCUSS_FIRST_HINTS = [
+  'давай обсуд', 'сначала обсуд', 'обсудим проект', 'обсудим лендинг', 'задавай вопросы',
+  'сперва обсуд', 'без контакта пока',
+  'давай обговор', 'спочатку обговор', 'обговоримо проєкт', 'став питання по проєкту',
+  'let us discuss', "let's discuss", 'discuss project first', 'talk about the project first', 'ask project questions first',
+  'hajde da razgovaramo', 'prvo da razmotrimo projekat', 'pričajmo prvo o projektu'
+];
+
 const SERVICE_CLARIFY_HISTORY_WINDOW = 12;
 const SERVICE_CLARIFY_MAX_STEPS = 2;
 const SERVICE_DETAIL_TOKENS: Record<Exclude<ServiceFamily, 'unknown'>, string[]> = {
@@ -246,6 +254,19 @@ function chooseModel(message: string, highIntent = false): string {
   const complex = highIntent || lower.length > 320 || ['architecture', 'integration', 'pipeline', 'roadmap', 'migration', 'security'].some((k) => lower.includes(k));
   return complex ? QUALITY_MODEL : FAST_MODEL;
 }
+
+type NextQuestionTarget =
+  | 'referral_source'
+  | 'identity'
+  | 'full_name'
+  | 'contact'
+  | 'service_type'
+  | 'primary_goal'
+  | 'timeline_or_budget'
+  | 'handoff';
+
+type QuestionSlot = 'identity_bundle' | 'service_type' | 'primary_goal' | 'timeline_or_budget';
+type NextQuestionDecision = {question: string; target: NextQuestionTarget};
 
 function safeJsonParse(input: string): unknown {
   try {
@@ -647,48 +668,96 @@ function buildAlternativeAcknowledgement(params: {
   return candidates[deterministicIndex];
 }
 
-function chooseNextQuestion(params: {
+function getQuestionSlotOrder(deferContactUntilBriefComplete = false): QuestionSlot[] {
+  return deferContactUntilBriefComplete
+    ? ['service_type', 'primary_goal', 'timeline_or_budget', 'identity_bundle']
+    : ['identity_bundle', 'service_type', 'primary_goal', 'timeline_or_budget'];
+}
+
+function resolveQuestionForSlot(params: {
+  slot: QuestionSlot;
+  locale: Locale;
+  missingFields: string[];
+  hasBudget: boolean;
+  hasTimeline: boolean;
+}): NextQuestionDecision | null {
+  const missing = new Set(params.missingFields);
+  if (params.slot === 'identity_bundle') {
+    const needsFullName = missing.has('full_name');
+    const needsContact = missing.has('contact');
+    if (needsFullName && needsContact) {
+      return {question: getIdentityRequestPrompt(params.locale), target: 'identity'};
+    }
+    if (needsFullName) {
+      return {question: getNameOnlyPrompt(params.locale), target: 'full_name'};
+    }
+    if (needsContact) {
+      return {question: getContactOnlyPrompt(params.locale), target: 'contact'};
+    }
+    return null;
+  }
+  if (params.slot === 'service_type' && missing.has('service_type')) {
+    return {question: serviceTypePrompt[params.locale], target: 'service_type'};
+  }
+  if (params.slot === 'primary_goal' && missing.has('primary_goal')) {
+    return {question: primaryGoalPrompt[params.locale], target: 'primary_goal'};
+  }
+  if (params.slot === 'timeline_or_budget' && missing.has('timeline_or_budget')) {
+    return {
+      question: getQualificationPrompt({
+        locale: params.locale,
+        hasScope: true,
+        hasBudget: params.hasBudget,
+        hasTimeline: params.hasTimeline
+      }),
+      target: 'timeline_or_budget'
+    };
+  }
+  return null;
+}
+
+function chooseNextQuestionDecision(params: {
   locale: Locale;
   missingFields: string[];
   hasBudget: boolean;
   hasTimeline: boolean;
   askReferralSource?: boolean;
-}): string {
+  deferContactUntilBriefComplete?: boolean;
+}): NextQuestionDecision {
   if (params.askReferralSource) {
-    return getReferralSourcePrompt(params.locale);
+    return {question: getReferralSourcePrompt(params.locale), target: 'referral_source'};
   }
-  const missing = new Set(params.missingFields);
-  const needsFullName = missing.has('full_name');
-  const needsContact = missing.has('contact');
-  if (needsFullName && needsContact) {
-    return getIdentityRequestPrompt(params.locale);
-  }
-  if (needsFullName) {
-    return getNameOnlyPrompt(params.locale);
-  }
-  if (needsContact) {
-    return getContactOnlyPrompt(params.locale);
-  }
-  if (missing.has('service_type')) {
-    return serviceTypePrompt[params.locale];
-  }
-  if (missing.has('primary_goal')) {
-    return primaryGoalPrompt[params.locale];
-  }
-  if (missing.has('timeline_or_budget')) {
-    return getQualificationPrompt({
+  for (const slot of getQuestionSlotOrder(params.deferContactUntilBriefComplete)) {
+    const resolved = resolveQuestionForSlot({
+      slot,
       locale: params.locale,
-      hasScope: true,
+      missingFields: params.missingFields,
       hasBudget: params.hasBudget,
       hasTimeline: params.hasTimeline
     });
+    if (resolved) {
+      return resolved;
+    }
   }
-  return getQualificationPrompt({
-    locale: params.locale,
-    hasScope: true,
-    hasBudget: true,
-    hasTimeline: true
-  });
+  return {
+    question: getQualificationPrompt({
+      locale: params.locale,
+      hasScope: true,
+      hasBudget: true,
+      hasTimeline: true
+    }),
+    target: 'handoff'
+  };
+}
+
+function mapTargetToSlot(target: NextQuestionTarget): QuestionSlot | null {
+  if (target === 'identity' || target === 'full_name' || target === 'contact') {
+    return 'identity_bundle';
+  }
+  if (target === 'service_type' || target === 'primary_goal' || target === 'timeline_or_budget') {
+    return target;
+  }
+  return null;
 }
 
 function hasRecentIdentityCapturePrompt(history: ChatMessage[]): boolean {
@@ -708,6 +777,52 @@ function hasRecentIdentityCapturePrompt(history: ChatMessage[]): boolean {
   return recentAssistantMessages.some((message) => hints.some((hint) => message.includes(hint)));
 }
 
+function isMeaningfulUserMessage(message: string): boolean {
+  const cleaned = cleanText(message);
+  if (!cleaned) {
+    return false;
+  }
+  if (isShortFactReply(cleaned)) {
+    return false;
+  }
+  if (cleaned.length < 20) {
+    return false;
+  }
+  return /[A-Za-zА-Яа-яЁёІіЇїЄє]/.test(cleaned);
+}
+
+function hasRecentScopedUserContext(history: ChatMessage[]): boolean {
+  const recentUserMessages = history
+    .filter((item) => item.role === 'user')
+    .slice(-4);
+  return recentUserMessages.some((item) => isLikelyAllowed(item.content));
+}
+
+function isProjectDiscussionFirstIntent(message: string): boolean {
+  const lower = message.toLowerCase();
+  return PROJECT_DISCUSS_FIRST_HINTS.some((hint) => lower.includes(hint));
+}
+
+function isProjectContextContinuationAfterContactPrompt(params: {
+  history: ChatMessage[];
+  message: string;
+  currentTurnSignals: ReturnType<typeof extractLeadSignals>;
+  hasDirectContactInCurrentMessage: boolean;
+}): boolean {
+  if (!hasRecentIdentityCapturePrompt(params.history) || params.hasDirectContactInCurrentMessage) {
+    return false;
+  }
+  if (!isMeaningfulUserMessage(params.message)) {
+    return false;
+  }
+  return Boolean(
+    params.currentTurnSignals.hasScope
+    || params.currentTurnSignals.hasBudget
+    || params.currentTurnSignals.hasTimeline
+    || hasMeaningfulPrimaryGoal(params.currentTurnSignals.primaryGoal)
+  );
+}
+
 function hasMeaningfulPrimaryGoal(goal?: string | null): boolean {
   const value = cleanText(goal);
   if (!value || value.length < 22) {
@@ -722,6 +837,55 @@ function hasMeaningfulPrimaryGoal(goal?: string | null): boolean {
     /потріб(ен|на)\s+(сайт|лендінг|логотип|брендинг|автоматизац|бот)/i
   ].some((pattern) => pattern.test(lower));
   return !generic || value.length >= 42;
+}
+
+function shouldAdvanceFromDuplicateQuestion(params: {
+  history: ChatMessage[];
+  nextQuestion: string;
+  message: string;
+}): boolean {
+  if (!isMeaningfulUserMessage(params.message)) {
+    return false;
+  }
+  const lastAssistantQuestion = getLastAssistantQuestion(params.history);
+  if (!lastAssistantQuestion) {
+    return false;
+  }
+  const normalizedLast = lastAssistantQuestion.toLowerCase();
+  const normalizedNext = params.nextQuestion.toLowerCase();
+  return normalizedLast.includes(normalizedNext) || similarity(lastAssistantQuestion, params.nextQuestion) >= 0.72;
+}
+
+function getNextQuestionAfterDuplicate(params: {
+  locale: Locale;
+  currentTarget: NextQuestionTarget;
+  missingFields: string[];
+  hasBudget: boolean;
+  hasTimeline: boolean;
+  deferContactUntilBriefComplete: boolean;
+}): NextQuestionDecision | null {
+  const currentSlot = mapTargetToSlot(params.currentTarget);
+  if (!currentSlot) {
+    return null;
+  }
+  const order = getQuestionSlotOrder(params.deferContactUntilBriefComplete);
+  const currentIndex = order.indexOf(currentSlot);
+  if (currentIndex < 0) {
+    return null;
+  }
+  for (const slot of order.slice(currentIndex + 1)) {
+    const resolved = resolveQuestionForSlot({
+      slot,
+      locale: params.locale,
+      missingFields: params.missingFields,
+      hasBudget: params.hasBudget,
+      hasTimeline: params.hasTimeline
+    });
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
 }
 
 function hasFamilySpecificDetails(params: {
@@ -818,6 +982,7 @@ function getServiceClarifyDecision(params: {
   highIntent: boolean;
   hasContact: boolean;
   handoffReady: boolean;
+  contactDeferralActive: boolean;
 }): {
   nextQuestion: string | null;
   askedStepsForFamily: number;
@@ -829,7 +994,7 @@ function getServiceClarifyDecision(params: {
   if (params.highIntent && !params.hasContact) {
     return {nextQuestion: null, askedStepsForFamily: 0, active: false};
   }
-  if (hasRecentIdentityCapturePrompt(params.history)) {
+  if (hasRecentIdentityCapturePrompt(params.history) && !params.contactDeferralActive) {
     return {nextQuestion: null, askedStepsForFamily: 0, active: false};
   }
 
@@ -874,6 +1039,7 @@ function getConversationMeta(params: {
   channel: 'web' | 'telegram' | 'instagram' | 'facebook' | 'whatsapp';
 }) {
   const signals = extractLeadSignals({history: params.history, message: params.message});
+  const currentTurnSignals = extractLeadSignals({history: [], message: params.message});
   const highIntent = isHighIntentMessage(params.message) || hasHotLeadSignals(params.message);
   const mergedDraft = {
     fullName: signals.name ?? params.briefContext?.fullName ?? null,
@@ -928,10 +1094,12 @@ function getConversationMeta(params: {
 
   const messageInScope = isLikelyAllowed(params.message);
   const contextHasScope = Boolean(mergedDraft.serviceType) || signals.hasScope;
+  const historyInScope = hasRecentScopedUserContext(params.history);
+  const hasMeaningfulGoalContext = hasMeaningfulPrimaryGoal(mergedDraft.primaryGoal) || hasMeaningfulPrimaryGoal(mergedDraft.firstDeliverable);
   const shortReplyContinuation =
     isShortFactReply(params.message) &&
     isQualificationQuestion(getLastAssistantQuestion(params.history));
-  const conversationInScope = messageInScope || contextHasScope || shortReplyContinuation;
+  const conversationInScope = messageInScope || contextHasScope || shortReplyContinuation || historyInScope || hasMeaningfulGoalContext;
   const serviceFamily = signals.serviceFamily !== 'unknown'
     ? signals.serviceFamily
     : mapServiceTypeToFamily(mergedDraft.serviceType);
@@ -941,6 +1109,26 @@ function getConversationMeta(params: {
     mergedDraft.telegramHandle ||
     params.briefContext?.hasConversationContact
   );
+  const hasDirectContactInCurrentMessage = Boolean(
+    currentTurnSignals.normalizedEmail
+    || currentTurnSignals.normalizedPhone
+    || currentTurnSignals.telegramHandle
+  );
+  const hasProjectMissingFields = brief.missingFields.some((field) =>
+    field === 'service_type' || field === 'primary_goal' || field === 'timeline_or_budget'
+  );
+  const contactDeferralActive = !hasContact
+    && !highIntent
+    && hasProjectMissingFields
+    && (
+      isProjectDiscussionFirstIntent(params.message)
+      || isProjectContextContinuationAfterContactPrompt({
+        history: params.history,
+        message: params.message,
+        currentTurnSignals,
+        hasDirectContactInCurrentMessage
+      })
+    );
   const serviceDetailScore = computeServiceDetailScore({
     serviceFamily,
     primaryGoal: mergedDraft.primaryGoal,
@@ -949,12 +1137,13 @@ function getConversationMeta(params: {
     message: params.message
   });
 
-  const defaultNextQuestion = chooseNextQuestion({
+  const defaultNextQuestionDecision = chooseNextQuestionDecision({
     locale: params.locale,
     missingFields: brief.missingFields,
     hasBudget: Boolean(mergedDraft.budgetHint) || signals.hasBudget,
     hasTimeline: Boolean(mergedDraft.timelineHint) || signals.hasTimeline,
-    askReferralSource: shouldAskReferralOnce
+    askReferralSource: shouldAskReferralOnce,
+    deferContactUntilBriefComplete: contactDeferralActive
   });
   const serviceClarify = getServiceClarifyDecision({
     locale: params.locale,
@@ -965,11 +1154,34 @@ function getConversationMeta(params: {
     conversationInScope,
     highIntent,
     hasContact,
-    handoffReady: coreHandoffReady || shouldAskReferralOnce
+    handoffReady: coreHandoffReady || shouldAskReferralOnce,
+    contactDeferralActive
   });
-  const nextQuestion = shouldAskReferralOnce
-    ? defaultNextQuestion
-    : (serviceClarify.nextQuestion ?? defaultNextQuestion);
+  let nextQuestion = shouldAskReferralOnce
+    ? defaultNextQuestionDecision.question
+    : (serviceClarify.nextQuestion ?? defaultNextQuestionDecision.question);
+  let nextQuestionTarget: NextQuestionTarget = shouldAskReferralOnce
+    ? defaultNextQuestionDecision.target
+    : (serviceClarify.nextQuestion ? 'primary_goal' : defaultNextQuestionDecision.target);
+
+  if (shouldAdvanceFromDuplicateQuestion({
+    history: params.history,
+    nextQuestion,
+    message: params.message
+  })) {
+    const advancedQuestion = getNextQuestionAfterDuplicate({
+      locale: params.locale,
+      currentTarget: nextQuestionTarget,
+      missingFields: brief.missingFields,
+      hasBudget: Boolean(mergedDraft.budgetHint) || signals.hasBudget,
+      hasTimeline: Boolean(mergedDraft.timelineHint) || signals.hasTimeline,
+      deferContactUntilBriefComplete: contactDeferralActive
+    });
+    if (advancedQuestion) {
+      nextQuestion = advancedQuestion.question;
+      nextQuestionTarget = advancedQuestion.target;
+    }
+  }
 
   return {
     signals,
@@ -978,13 +1190,15 @@ function getConversationMeta(params: {
     preferredName: extractPreferredFirstName(mergedDraft.fullName),
     highIntent,
     nextQuestion,
+    nextQuestionTarget,
     conversationInScope,
     serviceFamily,
     serviceDetailScore,
     serviceClarifyNextQuestion: serviceClarify.nextQuestion,
     askedServiceClarifySteps: serviceClarify.askedStepsForFamily,
     serviceClarifyActive: serviceClarify.active,
-    referralPromptRequired: shouldAskReferralOnce
+    referralPromptRequired: shouldAskReferralOnce,
+    contactDeferralActive
   };
 }
 
@@ -1341,6 +1555,7 @@ export async function generateAgencyReply(params: {
     'After core brief is complete, ask once where the customer heard about us.',
     'Do not block handoff if referral source is still unknown after that one question.',
     'Question priority: contact first, then service and primary goal, then timeline/budget.',
+    'If user explicitly asks to discuss project details first, continue project questions and avoid repeating contact request until project brief is captured (except high-intent urgent cases).',
     'If serviceClarifyActive=true, ask only the provided serviceClarifyQuestion and do not jump to other discovery questions.',
     'If user gives a short factual answer to your previous qualifying question, continue the thread without scope reset.',
     'If user asks for call/estimate urgently and contact is present, treat as expedite handoff candidate.',
@@ -1517,8 +1732,8 @@ export async function generateAgencyReply(params: {
   }
   if (meta.referralPromptRequired) {
     composedAnswer = ensureTargetQuestion(composedAnswer, meta.nextQuestion);
-  } else if (meta.serviceClarifyNextQuestion) {
-    composedAnswer = ensureTargetQuestion(composedAnswer, meta.serviceClarifyNextQuestion);
+  } else if (meta.serviceClarifyNextQuestion || meta.contactDeferralActive) {
+    composedAnswer = ensureTargetQuestion(composedAnswer, meta.nextQuestion);
   } else if (!meta.brief.handoffReady && !hasQuestion(composedAnswer)) {
     composedAnswer = trimForAnswer(`${composedAnswer} ${meta.nextQuestion}`);
   }

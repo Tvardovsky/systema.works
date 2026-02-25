@@ -94,6 +94,51 @@ describe('generateAgencyReply contact follow-up logic', () => {
     expect(result.nextQuestion).toBe('Для какого бизнеса нужен сайт/приложение и какой главный результат вы хотите получить?');
   });
 
+  it('does not repeat scope-clarify prompt after meaningful project reply', async () => {
+    const scopePrompt = 'Уточните, пожалуйста, задачу одной фразой: какой продукт или услугу нужно сделать в первую очередь?';
+    const result = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Мне нужно вести запись клиентов для оказания парикмахерских услуг и хранить карточки клиентов с историей процедур',
+      history: [
+        {role: 'assistant', content: scopePrompt}
+      ],
+      identityState: 'unverified',
+      channel: 'web',
+      briefContext: {
+        fullName: 'Елена',
+        phone: '+380963313133',
+        hasConversationContact: true
+      }
+    });
+
+    expect(result.topic).toBe('allowed');
+    expect(result.nextQuestion).not.toBe(scopePrompt);
+    expect(result.answer).not.toBe(scopePrompt);
+  });
+
+  it('treats generic "приложение/application" as in-scope website_app flow', async () => {
+    const ru = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Мне нужно приложение для учета клиентов',
+      history: [],
+      identityState: 'unverified',
+      channel: 'web'
+    });
+
+    const en = await generateAgencyReply({
+      locale: 'en',
+      message: 'Need an application for customer booking',
+      history: [],
+      identityState: 'unverified',
+      channel: 'web'
+    });
+
+    expect(ru.topic).toBe('allowed');
+    expect(en.topic).toBe('allowed');
+    expect(ru.nextQuestion).not.toBe('Уточните, пожалуйста, задачу одной фразой: какой продукт или услугу нужно сделать в первую очередь?');
+    expect(ru.nextQuestion.toLowerCase()).toContain('сценар');
+  });
+
   it('does not fall back to generic scope reply for short budget answers in scoped dialog', async () => {
     const history: ChatMessage[] = [
       {role: 'user', content: 'Мне нужен лендинг для агентства аренды автомобилей'},
@@ -298,6 +343,35 @@ describe('generateAgencyReply contact follow-up logic', () => {
       locale: 'ru',
       message: 'Нужен сайт, срочно, нужен расчет и созвон сегодня',
       history: [],
+      identityState: 'unverified',
+      channel: 'web'
+    });
+
+    expect(result.nextQuestion).toBe(getIdentityRequestPrompt('ru'));
+  });
+
+  it('defers repeated contact capture when user asks to discuss project first', async () => {
+    const result = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Давай сначала обсудим проект. Нужен лендинг для салона и запись клиентов через форму',
+      history: [
+        {role: 'assistant', content: getIdentityRequestPrompt('ru')}
+      ],
+      identityState: 'unverified',
+      channel: 'web'
+    });
+
+    expect(result.nextQuestion).not.toBe(getIdentityRequestPrompt('ru'));
+    expect(result.nextQuestion).not.toBe(getContactOnlyPrompt('ru'));
+  });
+
+  it('keeps hot-intent contact-first even when user asks to discuss first', async () => {
+    const result = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Давай сначала обсудим, но нужен срочный созвон сегодня и быстрый старт',
+      history: [
+        {role: 'assistant', content: getIdentityRequestPrompt('ru')}
+      ],
       identityState: 'unverified',
       channel: 'web'
     });

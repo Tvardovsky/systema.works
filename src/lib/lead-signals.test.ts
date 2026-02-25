@@ -181,6 +181,22 @@ describe('extractLeadSignals', () => {
     expect(sr.serviceFamily).toBe('branding_logo');
   });
 
+  it('maps generic application phrasing to web_app family', () => {
+    const ru = extractLeadSignals({
+      history: [],
+      message: 'Мне нужно приложение для учета клиентов в салоне'
+    });
+    const en = extractLeadSignals({
+      history: [],
+      message: 'Need an application for customer booking and records'
+    });
+
+    expect(ru.serviceType).toBe('web_app');
+    expect(en.serviceType).toBe('web_app');
+    expect(ru.serviceFamily).toBe('website_app');
+    expect(en.serviceFamily).toBe('website_app');
+  });
+
   it('captures referral source after assistant asks referral question', () => {
     const result = extractLeadSignals({
       history: [
