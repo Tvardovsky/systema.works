@@ -9,6 +9,33 @@ const localeHeadlines: Record<(typeof locales)[number], RegExp> = {
   uk: /Створюємо цифрові продукти, які дають ліди/i
 };
 
+const aiPreviewByLocale: Record<(typeof locales)[number], {
+  badge: string;
+  user: string;
+  assistant: string;
+}> = {
+  en: {
+    badge: 'AI sales-manager roadmap',
+    user: 'Need a landing page and chatbot handoff in 2 weeks.',
+    assistant: 'Got it. I will clarify scope, timeline, budget range and contact, then pass a structured brief to a manager.'
+  },
+  ru: {
+    badge: 'AI roadmap квалификации',
+    user: 'Нужен лендинг и чат-бот с передачей менеджеру за 2 недели.',
+    assistant: 'Принято. Уточню scope, сроки, бюджет и контакт, затем передам менеджеру структурированный бриф.'
+  },
+  'sr-ME': {
+    badge: 'AI roadmap kvalifikacije',
+    user: 'Treba mi landing stranica i chatbot handoff za 2 nedelje.',
+    assistant: 'Primljeno. Razjasniću scope, rok, budžet i kontakt, pa proslediti menadžeru strukturiran brief.'
+  },
+  uk: {
+    badge: 'AI roadmap кваліфікації',
+    user: 'Потрібен лендінг і чат-бот з передачею менеджеру за 2 тижні.',
+    assistant: 'Прийнято. Уточню scope, строки, бюджет і контакт, а потім передам менеджеру структурований бриф.'
+  }
+};
+
 function parseRGB(color: string) {
   const match = color.match(/rgba?\(([^)]+)\)/);
   if (!match) {
@@ -59,6 +86,22 @@ test.describe('landing', () => {
       await expect(page.locator('h1')).toHaveText(localeHeadlines[locale]);
     });
   }
+
+  test('ai consultation preview is localized for each locale', async ({page}) => {
+    for (const locale of locales) {
+      await page.goto(`/${locale}`);
+      const section = page.locator('#ai-consultation');
+
+      await expect(section).toContainText(aiPreviewByLocale[locale].badge);
+      await expect(section).toContainText(aiPreviewByLocale[locale].user);
+      await expect(section).toContainText(aiPreviewByLocale[locale].assistant);
+
+      if (locale !== 'en') {
+        await expect(section).not.toContainText('Need a landing + chatbot handoff in 2 weeks.');
+        await expect(section).not.toContainText('Got it. I will qualify scope, budget, timeline, and route your brief to manager.');
+      }
+    }
+  });
 
   test('navbar is sticky while scrolling', async ({page}) => {
     await page.goto('/en');
@@ -215,15 +258,313 @@ test.describe('landing', () => {
 
   test('chat opens from landing CTA buttons', async ({page}) => {
     await page.goto('/en');
+    const panel = page.locator('aside.chat-panel');
 
     await page.getByTestId('cta-primary-hero').click();
-    await expect(page.locator('aside.chat-panel')).toBeVisible();
+    await expect(panel).toBeVisible();
 
-    await page.getByRole('button', {name: /close/i}).click();
-    await expect(page.locator('aside.chat-panel')).toBeHidden();
+    await page.locator('aside.chat-panel header button', {hasText: /close/i}).click();
+    await expect(panel).toBeHidden();
+
+    await page.locator('button.chat-launcher').click();
+    await expect(panel).toBeVisible();
+    await page.locator('aside.chat-panel header button', {hasText: /close/i}).click();
+    await expect(panel).toBeHidden();
 
     await page.getByTestId('cta-primary-ai').click();
-    await expect(page.locator('aside.chat-panel')).toBeVisible();
+    await expect(panel).toBeVisible();
+  });
+
+  test('chat keeps briefing after timeline and does not lock immediately', async ({page}) => {
+    let replyStep = 0;
+    await page.route('**/api/chat/session/start', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          allowed: true,
+          sessionId: 'test-briefing-session',
+          message: 'Здравствуйте. Опишите задачу.'
+        })
+      });
+    });
+    await page.route('**/api/chat/message', async (route) => {
+      const scriptedReplies = [
+        'Понял задачу, двигаемся дальше по брифу. Чтобы не потерять контекст, напишите ваше имя и любой контакт: email, телефон или Telegram.',
+        'Спасибо. Подскажите, пожалуйста, срок запуска.',
+        'Отлично. И какой бюджет вы планируете?'
+      ];
+      const answer = scriptedReplies[Math.min(replyStep, scriptedReplies.length - 1)];
+      replyStep += 1;
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer,
+          topic: 'allowed',
+          leadIntentScore: 0.91,
+          nextQuestion: ''
+        })
+      });
+    });
+
+    await page.goto('/ru');
+
+    await page.getByRole('button', {name: 'AI чат'}).click();
+    const startButton = page.getByRole('button', {name: 'Начать', exact: true});
+    if (await startButton.count()) {
+      await startButton.click();
+    }
+
+    const input = page.getByRole('textbox', {name: 'Опишите вашу задачу'});
+    const sendButton = page.getByRole('button', {name: 'Отправить'});
+
+    await input.fill('Нужен лендинг для аренды авто');
+    await sendButton.click();
+    await expect(page.locator('.chat-message.assistant:not(.chat-message-typing)').last()).toContainText(/имя|контакт/i);
+
+    await input.fill('Олег, +38268291324');
+    await sendButton.click();
+    await expect(page.locator('.chat-message.assistant:not(.chat-message-typing)').last()).toContainText(/срок/i);
+
+    await input.fill('3 месяца');
+    await sendButton.click();
+    await expect(page.locator('.chat-message.assistant:not(.chat-message-typing)').last()).toContainText(/бюджет/i);
+    await expect(page.locator('text=/Cooldown:/i')).toHaveCount(0);
+    await expect(input).toBeEnabled();
+  });
+
+  test('chat safety guard warns twice and locks on third invalid contact input', async ({page}) => {
+    let invalidAttempts = 0;
+    let isLocked = false;
+
+    await page.route('**/api/chat/session/start', async (route) => {
+      if (isLocked) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            allowed: false,
+            chatLocked: true,
+            chatMode: 'safety_locked',
+            retryAfterSeconds: 3600,
+            message: 'This chat is temporarily closed due to repeated invalid contact attempts.'
+          })
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          allowed: true,
+          sessionId: 'test-safety-session',
+          message: 'Please provide your name and contact.'
+        })
+      });
+    });
+
+    await page.route('**/api/chat/message', async (route) => {
+      invalidAttempts += 1;
+      if (invalidAttempts >= 3) {
+        isLocked = true;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            answer: 'This chat is temporarily closed due to repeated invalid contact attempts.',
+            topic: 'disallowed',
+            leadIntentScore: 0.1,
+            nextQuestion: '',
+            chatLocked: true,
+            chatMode: 'safety_locked',
+            retryAfterSeconds: 3600,
+            sessionClosed: true
+          })
+        });
+        return;
+      }
+
+      const attemptsLeft = 3 - invalidAttempts;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer: `Your name looks invalid. Attempts left before a 1-hour pause: ${attemptsLeft}`,
+          topic: 'unclear',
+          leadIntentScore: 0.3,
+          nextQuestion: ''
+        })
+      });
+    });
+
+    await page.goto('/en');
+
+    await page.locator('button.chat-launcher').click();
+    const startButton = page.locator('aside.chat-panel').getByRole('button', {name: /start/i});
+    if (await startButton.count()) {
+      await startButton.click();
+    }
+
+    const input = page.locator('.chat-composer input');
+    const sendButton = page.locator('.chat-composer button[type="submit"]');
+
+    await input.fill('My name is admin123');
+    await sendButton.click();
+    await expect(page.locator('.chat-message.assistant:not(.chat-message-typing)').last()).toContainText(/name looks invalid|attempts left/i, {timeout: 15000});
+
+    await input.fill('My name is admin123');
+    await sendButton.click();
+    await expect(page.locator('.chat-message.assistant:not(.chat-message-typing)').last()).toContainText(/Attempts left before a 1-hour pause: 1/i, {timeout: 15000});
+
+    await input.fill('My name is admin123');
+    await sendButton.click();
+    await expect(page.locator('.chat-message.assistant:not(.chat-message-typing)').last()).toContainText(/temporarily closed/i, {timeout: 15000});
+    await expect(page.locator('.chat-system-note')).toBeVisible();
+    await expect(page.locator('.chat-composer')).toHaveCount(0);
+
+    await page.reload();
+    await page.locator('button.chat-launcher').click();
+    const startAfterReload = page.locator('aside.chat-panel').getByRole('button', {name: /start/i});
+    if (await startAfterReload.count()) {
+      await startAfterReload.click();
+    }
+
+    await expect(page.locator('.chat-message.assistant:not(.chat-message-typing)').last()).toContainText(/temporarily closed/i, {timeout: 15000});
+    await expect(page.locator('.chat-system-note')).toBeVisible();
+    await expect(page.locator('.chat-composer')).toHaveCount(0);
+  });
+
+  test('chat mobile layout uses messenger bubbles and typing lifecycle', async ({page}) => {
+    await page.setViewportSize({width: 390, height: 844});
+
+    await page.route('**/api/chat/session/start', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          allowed: true,
+          sessionId: 'test-mobile-session',
+          message: 'Welcome. Tell me what you need.'
+        })
+      });
+    });
+
+    await page.route('**/api/chat/message', async (route) => {
+      let message = 'Need details';
+      const rawBody = route.request().postData();
+      if (rawBody) {
+        try {
+          const parsed = JSON.parse(rawBody) as {message?: string};
+          if (parsed.message) {
+            message = parsed.message;
+          }
+        } catch {
+          message = 'Need details';
+        }
+      }
+
+      await page.waitForTimeout(380);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer: `Got it. I will qualify scope for: ${message}`,
+          topic: 'allowed',
+          leadIntentScore: 0.92,
+          nextQuestion: 'What timeline do you have?'
+        })
+      });
+    });
+
+    await page.goto('/en');
+
+    await page.locator('button.chat-launcher').click();
+    await page.getByRole('button', {name: 'Start', exact: true}).click();
+    await expect(page.locator('.chat-row-assistant .chat-message').first()).toContainText('Welcome. Tell me what you need.');
+
+    const layoutMetrics = await page.evaluate(() => {
+      const panel = document.querySelector('aside.chat-panel') as HTMLElement | null;
+      const log = document.querySelector('.chat-log') as HTMLElement | null;
+      if (!panel || !log) {
+        return null;
+      }
+
+      const panelRect = panel.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      return {
+        panelHeightRatio: panelRect.height / viewportHeight,
+        panelOverflowY: getComputedStyle(panel).overflowY,
+        logOverflowY: getComputedStyle(log).overflowY
+      };
+    });
+
+    expect(layoutMetrics).not.toBeNull();
+    if (!layoutMetrics) {
+      throw new Error('Missing chat layout metrics');
+    }
+    expect(layoutMetrics.panelHeightRatio).toBeGreaterThanOrEqual(0.85);
+    expect(layoutMetrics.panelOverflowY).toBe('hidden');
+    expect(['auto', 'scroll']).toContain(layoutMetrics.logOverflowY);
+
+    const input = page.getByRole('textbox', {name: 'Describe your task'});
+    const sendButton = page.getByRole('button', {name: 'Send'});
+    const userText = 'Need a landing + chatbot handoff in 2 weeks.';
+    await input.fill(userText);
+    await sendButton.click();
+
+    await expect(page.locator('.chat-message-typing')).toBeVisible();
+    await expect(sendButton).toBeDisabled();
+    await expect(page.locator('.chat-row-user .chat-message').last()).toContainText(userText);
+    await expect(page.locator('.chat-row-assistant .chat-message:not(.chat-message-typing)').last()).toContainText('Got it. I will qualify scope');
+    await expect(page.locator('.chat-message-typing')).toHaveCount(0);
+    await expect(input).toBeEnabled();
+    await expect(sendButton).toBeDisabled();
+
+    const bubbleMetrics = await page.evaluate(() => {
+      const userBubble = document.querySelector('.chat-row-user .chat-message') as HTMLElement | null;
+      const assistantBubble = Array
+        .from(document.querySelectorAll('.chat-row-assistant .chat-message'))
+        .find((node) => !node.classList.contains('chat-message-typing')) as HTMLElement | undefined;
+
+      if (!userBubble || !assistantBubble || !userBubble.parentElement || !assistantBubble.parentElement) {
+        return null;
+      }
+
+      const userStyle = getComputedStyle(userBubble);
+      const assistantStyle = getComputedStyle(assistantBubble);
+      return {
+        userJustify: getComputedStyle(userBubble.parentElement).justifyContent,
+        assistantJustify: getComputedStyle(assistantBubble.parentElement).justifyContent,
+        userTail: Number.parseFloat(userStyle.borderBottomRightRadius),
+        userTop: Number.parseFloat(userStyle.borderTopRightRadius),
+        assistantTail: Number.parseFloat(assistantStyle.borderBottomLeftRadius),
+        assistantTop: Number.parseFloat(assistantStyle.borderTopLeftRadius),
+        userBg: userStyle.backgroundColor,
+        assistantBg: assistantStyle.backgroundColor
+      };
+    });
+
+    expect(bubbleMetrics).not.toBeNull();
+    if (!bubbleMetrics) {
+      throw new Error('Missing bubble metrics');
+    }
+    expect(bubbleMetrics.userJustify).toBe('flex-end');
+    expect(bubbleMetrics.assistantJustify).toBe('flex-start');
+    expect(bubbleMetrics.userTail).toBeLessThan(bubbleMetrics.userTop);
+    expect(bubbleMetrics.assistantTail).toBeLessThan(bubbleMetrics.assistantTop);
+    expect(bubbleMetrics.userBg).not.toBe(bubbleMetrics.assistantBg);
+
+    const userBg = parseRGB(bubbleMetrics.userBg);
+    const assistantBg = parseRGB(bubbleMetrics.assistantBg);
+    expect(userBg).not.toBeNull();
+    expect(assistantBg).not.toBeNull();
+    if (!userBg || !assistantBg) {
+      throw new Error('Failed to parse bubble colors');
+    }
+    expect(relativeLuminance(userBg)).toBeLessThan(relativeLuminance(assistantBg));
   });
 
   test('language switcher changes locale prefix and content', async ({page}) => {

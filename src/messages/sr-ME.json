@@ -95,11 +95,22 @@
     "why2Body": "Moderan UI/UX i stabilna arhitektura grade se zajedno, od početka.",
     "why3Title": "Dugoročna saradnja",
     "why3Body": "Gradimo sisteme koje je lako održavati i skalirati i nakon launch-a.",
+    "aiBadge": "AI roadmap kvalifikacije",
     "aiTitle": "AI konsultacija koja kvalifikuje leadove",
-    "aiBody": "Asistent postavlja prava pitanja, skuplja kontekst projekta i brzo šalje hot lead menadžeru.",
-    "aiPoint1": "Fokusiran na razvoj, automatizaciju, AI, SMM i praktične UI/UX zahtjeve.",
-    "aiPoint2": "Zaštićeno anti-bot kontrolama, validacijom i server guardrail pravilima.",
-    "aiPoint3": "Lead logovi i transkripti su dostupni adminu.",
+    "aiBody": "Asistent vodi kratku kvalifikaciju: razjašnjava zadatak, rok, okvir budžeta i kontakt, pa priprema jasan brief za menadžera.",
+    "aiPreviewUser": "Treba mi landing stranica i chatbot handoff za 2 nedelje.",
+    "aiPreviewAssistant": "Primljeno. Razjasniću scope, rok, budžet i kontakt, pa proslediti menadžeru strukturiran brief.",
+    "aiHowTitle": "Kako asistent radi",
+    "aiStep1Title": "1. Razjašnjava vaš zahtjev",
+    "aiStep1Body": "Postavlja kratka pitanja o cilju projekta, očekivanom rezultatu i prioritetu prve isporuke.",
+    "aiStep2Title": "2. Prikuplja osnovu za procjenu",
+    "aiStep2Body": "Bilježi rok, okvir budžeta i jedan kontakt da zahtjev ide dalje bez zastoja.",
+    "aiStep3Title": "3. Šalje spreman brief menadžeru",
+    "aiStep3Body": "Formira strukturiran upit, označi prioritet i prosleđuje hot zahtjeve za brzu obradu.",
+    "aiWhatTitle": "Šta je pod kontrolom",
+    "aiPoint1": "Fokus je samo na praktičnim zahtjevima: razvoj, automatizacija, AI, SMM i UI/UX realizacija.",
+    "aiPoint2": "Na svakom koraku rade anti-bot provjere, server validacija i kontrola kvaliteta odgovora.",
+    "aiPoint3": "Leadovi i istorija razgovora dostupni su adminu na jednom mjestu.",
     "aiCta": "Pokreni AI chat",
     "contactTitle": "Hajde da mapiramo vaš projekat",
     "contactBody": "Pošaljite cilj, rok i kontakt. Vratićemo se sa praktičnim planom i narednim koracima.",
@@ -115,14 +126,32 @@
     "typing": "Pišem...",
     "placeholder": "Opišite zadatak",
     "send": "Pošalji",
-    "leadTitle": "Brza lead forma",
-    "name": "Vaše ime",
-    "company": "Kompanija",
-    "contact": "Telegram/WhatsApp/email",
-    "consent": "Saglasan/saglasna sam za kontakt po ovom upitu",
-    "submitLead": "Pošalji lead",
-    "leadSent": "Hvala. Upit je sačuvan. Tim će vam se javiti uskoro.",
     "startError": "Ne možemo pokrenuti sesiju sada. Pokušajte ponovo.",
-    "replyError": "Nisam uspio obraditi poruku. Pokušajte opet."
+    "replyError": "Nisam uspio obraditi poruku. Pokušajte opet.",
+    "cooldownLabel": "Sledeća poruka biće dostupna za {time}.",
+    "lowCostMode": "Vaš zahtjev je već u obradi. Preostalo pojašnjenja: {count}."
+  },
+  "Admin": {
+    "fields": {
+      "referralSource": "Izvor upita"
+    },
+    "sections": {
+      "technicalSignals": "Tehnički signali klijenta"
+    },
+    "labels": {
+      "firstSeen": "Prva aktivnost",
+      "lastSeen": "Poslednja aktivnost",
+      "lastIp": "Poslednji IP (maskiran)",
+      "lastCountry": "Poslednja država",
+      "lastBrowser": "Poslednji browser",
+      "lastDevice": "Poslednji uređaj",
+      "uniqueIps90d": "Jedinstveni IP (90d)",
+      "uniqueCountries90d": "Jedinstvene države (90d)",
+      "uniqueDevices90d": "Jedinstveni uređaji (90d)",
+      "recentIps": "Nedavni IP",
+      "recentCountries": "Nedavne države",
+      "recentAgents": "Nedavni user-agent",
+      "hits": "Hitovi"
+    }
   }
 }

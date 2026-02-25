@@ -216,12 +216,18 @@ export default async function HomePage({params}: Props) {
             <article className="card bg-base-100 shadow-sm">
               <div className="card-body gap-4 p-6 md:p-8">
                 <div className="flex items-center gap-3">
-                  <Image src="/assets/systema-mark.svg" alt="Systema mark" width={52} height={52} />
+                  <Image
+                    src="/assets/systema-mark.svg"
+                    alt="Systema mark"
+                    width={52}
+                    height={52}
+                    style={{height: 'auto'}}
+                  />
                   <span
                     className="badge badge-outline landing-badge text-[0.68rem] font-semibold uppercase tracking-[0.14em]"
                     data-testid="landing-badge-ai"
                   >
-                    AI sales-manager roadmap
+                    {t('aiBadge')}
                   </span>
                 </div>
 
@@ -231,19 +237,46 @@ export default async function HomePage({params}: Props) {
                 <div className="rounded-2xl bg-base-200/65 p-4">
                   <div className="ai-chat-preview">
                     <div className="ai-chat-row ai-chat-row-user">
-                      <p className="ai-chat-bubble ai-chat-bubble-user">Need a landing + chatbot handoff in 2 weeks.</p>
+                      <p className="ai-chat-bubble ai-chat-bubble-user">{t('aiPreviewUser')}</p>
                     </div>
                     <div className="ai-chat-row ai-chat-row-assistant">
-                      <p className="ai-chat-bubble ai-chat-bubble-assistant">Got it. I will qualify scope, budget, timeline, and route your brief to manager.</p>
+                      <p className="ai-chat-bubble ai-chat-bubble-assistant">{t('aiPreviewAssistant')}</p>
                     </div>
                   </div>
                 </div>
 
-                <ul className="menu rounded-2xl bg-base-200/65 p-2">
-                  <li><span>{t('aiPoint1')}</span></li>
-                  <li><span>{t('aiPoint2')}</span></li>
-                  <li><span>{t('aiPoint3')}</span></li>
-                </ul>
+                <div className="space-y-3">
+                  <h3 className="text-lg font-bold text-primary">{t('aiHowTitle')}</h3>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <article className="card bg-base-200/65 shadow-sm">
+                      <div className="card-body gap-2 p-4">
+                        <h4 className="text-sm font-bold text-primary">{t('aiStep1Title')}</h4>
+                        <p className="text-sm leading-relaxed text-base-content/78">{t('aiStep1Body')}</p>
+                      </div>
+                    </article>
+                    <article className="card bg-base-200/65 shadow-sm">
+                      <div className="card-body gap-2 p-4">
+                        <h4 className="text-sm font-bold text-primary">{t('aiStep2Title')}</h4>
+                        <p className="text-sm leading-relaxed text-base-content/78">{t('aiStep2Body')}</p>
+                      </div>
+                    </article>
+                    <article className="card bg-base-200/65 shadow-sm">
+                      <div className="card-body gap-2 p-4">
+                        <h4 className="text-sm font-bold text-primary">{t('aiStep3Title')}</h4>
+                        <p className="text-sm leading-relaxed text-base-content/78">{t('aiStep3Body')}</p>
+                      </div>
+                    </article>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-base-200/65 p-4">
+                  <p className="text-sm font-bold text-primary">{t('aiWhatTitle')}</p>
+                  <ul className="mt-2 space-y-2 text-sm leading-relaxed text-base-content/80">
+                    <li>{t('aiPoint1')}</li>
+                    <li>{t('aiPoint2')}</li>
+                    <li>{t('aiPoint3')}</li>
+                  </ul>
+                </div>
 
                 <div className="card-actions">
                   <button type="button" className="btn btn-primary rounded-full px-6" data-testid="cta-primary-ai" data-chat-open>

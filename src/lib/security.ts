@@ -30,6 +30,11 @@ export function enforceRateLimit(key: string, limit: number, windowMs: number): 
 }
 
 export async function verifyTurnstile(token: string, ip: string): Promise<boolean> {
+  const enforceInDev = process.env.TURNSTILE_ENFORCE_DEV === 'true';
+  if (process.env.NODE_ENV !== 'production' && !enforceInDev) {
+    return true;
+  }
+
   const secret = process.env.TURNSTILE_SECRET_KEY;
   if (!secret) {
     return process.env.NODE_ENV !== 'production';

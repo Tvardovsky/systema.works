@@ -1,29 +1,27 @@
 import {Telegraf} from 'telegraf';
-import type {LeadPayload, LeadPriority} from '@/types/lead';
 
-export async function sendLeadToTelegram(lead: LeadPayload & {priority: LeadPriority; intentScore: number}) {
+function getTelegramBot(): Telegraf | null {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token) {
+    return null;
+  }
+  return new Telegraf(token);
+}
 
-  if (!token || !chatId) {
+export async function sendTelegramTextMessage(chatId: string, text: string) {
+  const bot = getTelegramBot();
+  if (!bot) {
     return {ok: false, skipped: true};
   }
 
-  const bot = new Telegraf(token);
-  const text = [
-    '<b>New SYSTEMA Lead</b>',
-    `Priority: <b>${lead.priority.toUpperCase()}</b>`,
-    `Score: ${lead.intentScore}`,
-    `Locale: ${lead.locale}`,
-    `Name: ${lead.name}`,
-    `Company: ${lead.company || '-'}`,
-    `Service: ${lead.serviceInterest}`,
-    `Budget: ${lead.budgetBand}`,
-    `Timeline: ${lead.timeline}`,
-    `Contact: ${lead.contactChannel} - ${lead.contactValue}`,
-    `Session: ${lead.chatTranscriptId}`
-  ].join('\n');
-
-  await bot.telegram.sendMessage(chatId, text, {parse_mode: 'HTML'});
+  await bot.telegram.sendMessage(chatId, text);
   return {ok: true};
+}
+
+export async function sendManagerAlert(text: string) {
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!chatId) {
+    return {ok: false, skipped: true};
+  }
+  return sendTelegramTextMessage(chatId, text);
 }

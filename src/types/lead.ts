@@ -1,27 +1,38 @@
 export type Locale = 'en' | 'sr-ME' | 'ru' | 'uk';
 
-export type ServiceInterest = 'web' | 'automation' | 'smm' | 'combo';
-
 export type LeadPriority = 'low' | 'medium' | 'high';
 
 export type ChatTopic = 'allowed' | 'disallowed' | 'unclear';
+
+export type ServiceFamily =
+  | 'website_app'
+  | 'branding_logo'
+  | 'automation'
+  | 'ai_assistant'
+  | 'ui_ux'
+  | 'smm_growth'
+  | 'unknown';
 
 export type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
 };
 
-export type LeadPayload = {
-  locale: Locale;
-  name: string;
-  company?: string;
-  serviceInterest: ServiceInterest;
-  budgetBand: '<1k' | '1k-3k' | '3k-10k' | '10k+' | 'unknown';
-  timeline: 'asap' | '1m' | '3m' | 'exploring';
-  contactChannel: 'telegram' | 'whatsapp' | 'email' | 'phone';
-  contactValue: string;
-  consent: boolean;
-  chatTranscriptId: string;
+export type BriefContext = {
+  fullName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  telegramHandle?: string | null;
+  serviceType?: string | null;
+  primaryGoal?: string | null;
+  firstDeliverable?: string | null;
+  timelineHint?: string | null;
+  budgetHint?: string | null;
+  referralSource?: string | null;
+  constraints?: string | null;
+  missingFields?: string[];
+  completenessScore?: number;
+  hasConversationContact?: boolean;
 };
 
 export type ChatResponse = {
@@ -30,4 +41,12 @@ export type ChatResponse = {
   leadIntentScore: number;
   nextQuestion: string;
   requiresLeadCapture: boolean;
+  conversationStage: 'discovery' | 'briefing' | 'contact_capture' | 'handoff_ready';
+  missingFields: string[];
+  handoffReady: boolean;
+  identityState: 'unverified' | 'pending_match' | 'verified';
+  memoryAccess?: 'none' | 'session_only' | 'full_customer';
+  memoryLoaded: boolean;
+  verificationHint?: string;
+  dialogMode?: 'context_continuation' | 'scope_clarify' | 'disallowed';
 };
