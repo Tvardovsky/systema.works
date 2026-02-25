@@ -49,4 +49,17 @@ export type ChatResponse = {
   memoryLoaded: boolean;
   verificationHint?: string;
   dialogMode?: 'context_continuation' | 'scope_clarify' | 'disallowed';
+  llmReplyDeferred?: boolean;
+  deferReason?: 'quota' | 'rate_limit' | 'connection' | 'parse_error' | null;
+  fallbackModelUsed?: boolean;
+  gracefulFailUsed?: boolean;
+  rephraseUsed?: boolean;
+  templateBlockTriggered?: boolean;
+  repetitionScore?: number | null;
+  topicGuard?: 'allowed' | 'unclear' | 'disallowed';
+  llmCallsCount?: number;
+  jsonRepairUsed?: boolean;
+  sameModelFallbackSkipped?: boolean;
+  parseFailReason?: 'length_limit' | 'invalid_json' | 'timeout' | null;
+  replyLatencyMs?: number | null;
 };

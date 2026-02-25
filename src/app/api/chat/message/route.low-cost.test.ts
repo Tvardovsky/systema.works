@@ -23,7 +23,11 @@ describe('buildLowCostAssistantAnswer', () => {
     });
 
     expect(result.answer).not.toContain('Спасибо за уточнение, я добавил это в заявку.');
-    expect(result.answer).toContain('Менеджер');
+    expect(result.answer.toLowerCase()).toContain('менедж');
+    expect(result.templateBlockTriggered).toBe(false);
+    expect(result.repetitionScore).toBeNull();
+    expect(result.llmReplyDeferred).toBe(true);
+    expect(result.deferReason).toBe('connection');
   });
 
   it('keeps locked system message when chat is locked', async () => {
@@ -39,5 +43,7 @@ describe('buildLowCostAssistantAnswer', () => {
     });
 
     expect(result.answer).toContain(getLockedMessage('ru', retryAfterSeconds));
+    expect(result.llmReplyDeferred).toBe(true);
+    expect(result.deferReason).toBe('connection');
   });
 });

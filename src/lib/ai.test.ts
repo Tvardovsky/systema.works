@@ -3,10 +3,11 @@ import {getContactOnlyPrompt, getIdentityRequestPrompt, getNameOnlyPrompt, getRe
 import type {ChatMessage} from '@/types/lead';
 
 let generateAgencyReply: typeof import('./ai').generateAgencyReply;
+let generateHandoffTerminalReply: typeof import('./ai').generateHandoffTerminalReply;
 
 beforeAll(async () => {
   process.env.OPENAI_API_KEY = '';
-  ({generateAgencyReply} = await import('./ai'));
+  ({generateAgencyReply, generateHandoffTerminalReply} = await import('./ai'));
 });
 
 describe('generateAgencyReply contact follow-up logic', () => {
@@ -178,7 +179,7 @@ describe('generateAgencyReply contact follow-up logic', () => {
       }
     });
 
-    expect(result.answer.toLowerCase()).not.toContain('бюджет');
+    expect(result.answer.toLowerCase()).not.toContain('ориентир по бюджету зафиксировал');
     expect(result.answer.toLowerCase()).not.toContain('ориентир по бюджету зафиксировал');
   });
 
@@ -464,5 +465,49 @@ describe('generateAgencyReply contact follow-up logic', () => {
 
     expect(result.nextQuestion).not.toBe(getReferralSourcePrompt('ru'));
     expect(result.handoffReady).toBe(true);
+  });
+
+  it('sets queued fallback metadata when llm reply is deferred', async () => {
+    const result = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Нужен лендинг под лидогенерацию',
+      history: [],
+      identityState: 'unverified',
+      channel: 'web'
+    });
+
+    expect(result.llmReplyDeferred).toBe(true);
+    expect(result.deferReason).toBe('connection');
+    expect(result.gracefulFailUsed).toBe(true);
+    expect(result.llmCallsCount).toBe(0);
+    expect(result.jsonRepairUsed).toBe(false);
+    expect(result.sameModelFallbackSkipped).toBe(false);
+    expect(result.parseFailReason).toBeNull();
+  });
+
+  it('does not emit banned legacy canned phrases in graceful fallback', async () => {
+    const result = await generateAgencyReply({
+      locale: 'ru',
+      message: 'Составь бриф',
+      history: [],
+      identityState: 'unverified',
+      channel: 'web'
+    });
+
+    expect(result.answer.toLowerCase()).not.toContain('контекст зафиксировал');
+    expect(result.answer.toLowerCase()).not.toContain('контакт увидел, добавил в заявку');
+  });
+
+  it('generates non-legacy terminal handoff message even without llm', async () => {
+    const result = await generateHandoffTerminalReply({
+      locale: 'ru',
+      history: [{role: 'assistant', content: 'Спасибо, заявка передана менеджеру.'}],
+      cooldownHours: 3,
+      conversationId: 'conv-handoff-test'
+    });
+
+    expect(result.answer).not.toBe('Спасибо, заявка передана менеджеру. Мы уже начали обработку. Следующее сообщение в этом чате будет доступно через 3 часа.');
+    expect(result.answer.toLowerCase()).toContain('менедж');
+    expect(result.answer).toContain('3');
   });
 });

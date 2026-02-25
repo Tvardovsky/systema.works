@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import {zodResponseFormat} from 'openai/helpers/zod';
 import type {BriefContext, ChatMessage, ChatResponse, Locale, ServiceFamily} from '@/types/lead';
 import {aiReplySchema} from './schemas';
 import {
@@ -18,11 +19,46 @@ import {computeLeadBriefState, isHighIntentMessage} from '@/lib/lead-brief';
 const FAST_MODEL = process.env.OPENAI_FAST_MODEL ?? 'gpt-5-mini';
 const QUALITY_MODEL = process.env.OPENAI_QUALITY_MODEL ?? 'gpt-5-mini';
 const FALLBACK_MODEL = process.env.OPENAI_FALLBACK_MODEL ?? 'gpt-5-mini';
+const OPENAI_MAX_RETRIES = Math.max(0, Number.parseInt(process.env.OPENAI_MAX_RETRIES ?? '0', 10) || 0);
+const OPENAI_REPLY_TIMEOUT_MS = Math.max(2500, Number.parseInt(process.env.OPENAI_REPLY_TIMEOUT_MS ?? '8000', 10) || 8000);
+const OPENAI_REPLY_FALLBACK_TIMEOUT_MS = Math.max(
+  2000,
+  Number.parseInt(process.env.OPENAI_REPLY_FALLBACK_TIMEOUT_MS ?? '5000', 10) || 5000
+);
 const REPLY_MAX_OUTPUT_TOKENS = Math.max(120, Number.parseInt(process.env.OPENAI_MAX_OUTPUT_TOKENS ?? '360', 10) || 360);
 const FALLBACK_MAX_OUTPUT_TOKENS = Math.max(100, Number.parseInt(process.env.OPENAI_FALLBACK_MAX_OUTPUT_TOKENS ?? '280', 10) || 280);
 const REPHRASE_MAX_OUTPUT_TOKENS = Math.max(80, Number.parseInt(process.env.OPENAI_REPHRASE_MAX_OUTPUT_TOKENS ?? '220', 10) || 220);
 const REPLY_REPETITION_THRESHOLD = Math.max(0.55, Math.min(0.95, Number.parseFloat(process.env.OPENAI_REPLY_REPETITION_THRESHOLD ?? '0.74') || 0.74));
 const HISTORY_WINDOW = Math.max(2, Number.parseInt(process.env.OPENAI_HISTORY_WINDOW ?? '10', 10) || 10);
+const BYPASS_HISTORY_WINDOW = Math.max(2, Math.min(6, Number.parseInt(process.env.OPENAI_BYPASS_HISTORY_WINDOW ?? '4', 10) || 4));
+
+export type LlmDeferReason = 'quota' | 'rate_limit' | 'connection' | 'parse_error';
+export type ParseFailReason = 'length_limit' | 'invalid_json' | 'timeout' | null;
+type StructuredAiReply = ReturnType<typeof aiReplySchema.parse>;
+
+const BANNED_REPLY_PHRASES: Record<Locale, string[]> = {
+  ru: [
+    'контекст зафиксировал',
+    'контакт увидел, добавил в заявку',
+    'понял задачу, двигаемся дальше по брифу',
+    'принял контекст, продолжим уточнения'
+  ],
+  uk: [
+    'контекст зафіксував',
+    'контакт бачу, додав до заявки',
+    'зрозумів запит, продовжуємо бриф'
+  ],
+  'sr-ME': [
+    'kontekst je zabilježen',
+    'kontakt sam vidio i dodao u prijavu',
+    'razumijem zahtjev, nastavimo sa brief-om'
+  ],
+  en: [
+    'i captured the context',
+    'i captured your contact and added it to the brief',
+    'understood, let us continue the brief'
+  ]
+};
 
 const scopeKeywords = [
   'website', 'web', 'web app', 'app', 'mobile', 'ios', 'android', 'landing',
@@ -229,7 +265,9 @@ const client = process.env.OPENAI_API_KEY
   ? new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
       project: process.env.OPENAI_PROJECT_ID || undefined,
-      organization: process.env.OPENAI_ORG_ID || undefined
+      organization: process.env.OPENAI_ORG_ID || undefined,
+      maxRetries: OPENAI_MAX_RETRIES,
+      timeout: OPENAI_REPLY_TIMEOUT_MS
     })
   : null;
 
@@ -267,12 +305,54 @@ type NextQuestionTarget =
 type QuestionSlot = 'identity_bundle' | 'service_type' | 'primary_goal' | 'timeline_or_budget';
 type NextQuestionDecision = {question: string; target: NextQuestionTarget};
 
-function safeJsonParse(input: string): unknown {
+function parseRawAiReply(input: string): ReturnType<typeof aiReplySchema.safeParse> {
   try {
-    return JSON.parse(input);
+    return aiReplySchema.safeParse(JSON.parse(input));
   } catch {
+    return aiReplySchema.safeParse(null);
+  }
+}
+
+function stripMarkdownCodeFence(input: string): string {
+  const trimmed = input.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+function extractLikelyJsonObject(input: string): string | null {
+  const stripped = stripMarkdownCodeFence(input);
+  const start = stripped.indexOf('{');
+  const end = stripped.lastIndexOf('}');
+  if (start < 0 || end < 0 || end <= start) {
     return null;
   }
+  return stripped.slice(start, end + 1);
+}
+
+function normalizeJsonLikeText(input: string): string {
+  return input
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/,\s*([}\]])/g, '$1');
+}
+
+function tryLocalJsonRepair(input: string): {parsed: ReturnType<typeof aiReplySchema.safeParse>; usedRepair: boolean} {
+  const direct = parseRawAiReply(input);
+  if (direct.success) {
+    return {parsed: direct, usedRepair: false};
+  }
+
+  const extracted = extractLikelyJsonObject(input);
+  if (!extracted) {
+    return {parsed: direct, usedRepair: false};
+  }
+
+  const repairedCandidate = normalizeJsonLikeText(extracted);
+  const repaired = parseRawAiReply(repairedCandidate);
+  return {
+    parsed: repaired,
+    usedRepair: repaired.success
+  };
 }
 
 function isRecoverableOpenAiError(error: unknown): boolean {
@@ -284,6 +364,34 @@ function isRecoverableOpenAiError(error: unknown): boolean {
     return error.status === 429 || code === 'insufficient_quota' || code === 'rate_limit_exceeded';
   }
   return false;
+}
+
+function classifyRecoverableReason(error: unknown): LlmDeferReason {
+  if (error instanceof OpenAI.APIError) {
+    const code = typeof error.code === 'string' ? error.code : '';
+    if (code === 'insufficient_quota') {
+      return 'quota';
+    }
+    if (error.status === 429 || code === 'rate_limit_exceeded') {
+      return 'rate_limit';
+    }
+  }
+  return 'connection';
+}
+
+function classifyParseFailReason(error: unknown): ParseFailReason {
+  const errorName = error instanceof Error ? error.name : '';
+  const errorMessage = error instanceof Error ? error.message.toLowerCase() : '';
+  if (errorName === 'LengthFinishReasonError' || errorMessage.includes('length')) {
+    return 'length_limit';
+  }
+  if (errorName.includes('Timeout') || errorMessage.includes('timeout')) {
+    return 'timeout';
+  }
+  if (error instanceof SyntaxError || errorMessage.includes('json')) {
+    return 'invalid_json';
+  }
+  return null;
 }
 
 function normalizeForSimilarity(text: string): string[] {
@@ -332,6 +440,11 @@ function templateLikeAnswer(answer: string, lastAssistantAnswers: string[] = [])
   }
 
   return false;
+}
+
+function containsBannedPhrase(locale: Locale, text: string): boolean {
+  const lower = text.toLowerCase();
+  return BANNED_REPLY_PHRASES[locale].some((phrase) => lower.includes(phrase));
 }
 
 function trimForAnswer(input: string): string {
@@ -510,6 +623,34 @@ function isQualificationQuestion(text: string | null): boolean {
   return qualificationQuestionHints.some((hint) => lower.includes(hint));
 }
 
+type UserAnsweredIntent = 'timeline' | 'budget' | 'contact' | 'service' | 'referral' | 'none';
+
+function detectAnsweredIntentFromHistory(params: {
+  message: string;
+  history: ChatMessage[];
+}): UserAnsweredIntent {
+  const lastAssistantQuestion = getLastAssistantQuestion(params.history)?.toLowerCase() ?? '';
+  if (!lastAssistantQuestion) {
+    return 'none';
+  }
+  if (/(бюдж|budget|budž|budzet|стоим|price|cost)/i.test(lastAssistantQuestion)) {
+    return 'budget';
+  }
+  if (/(срок|timeline|deadline|launch|термін|rok|duration)/i.test(lastAssistantQuestion)) {
+    return 'timeline';
+  }
+  if (/(email|phone|telegram|контакт|контак|имя|name|kontakt|ime)/i.test(lastAssistantQuestion)) {
+    return 'contact';
+  }
+  if (/(откуда|referral|узнал|heard about|source|izvor|джерел)/i.test(lastAssistantQuestion)) {
+    return 'referral';
+  }
+  if (/(service|услуг|послуг|scenario|конверс|сценар|канал|kpi|ниш|бизнес)/i.test(lastAssistantQuestion)) {
+    return 'service';
+  }
+  return 'none';
+}
+
 function handoffNotice(locale: Locale): string {
   if (locale === 'ru') {
     return 'Отлично, передаю лид менеджеру.';
@@ -530,97 +671,236 @@ function maxSimilarityToRecent(answer: string, recentAssistantAnswers: string[])
   return recentAssistantAnswers.reduce((max, previous) => Math.max(max, similarity(answer, previous)), 0);
 }
 
-function buildMessageSnippet(message: string, maxLength = 96): string {
-  const cleaned = cleanText(message) ?? '';
-  if (!cleaned) {
-    return '';
+type GracefulSignalType = 'contact' | 'timeline' | 'budget' | 'area' | 'handoff' | 'progress';
+
+const GRACEFUL_SIGNAL_VARIANTS: Record<Locale, Record<GracefulSignalType, string[]>> = {
+  ru: {
+    contact: [
+      'Отлично, контакт уже есть.',
+      'Принял, данные для связи у нас есть.',
+      'Спасибо, контакт сохранил для менеджера.'
+    ],
+    timeline: [
+      'По срокам запуска понял.',
+      'Ориентир по времени учёл.',
+      'Сроки принял, продолжаем.'
+    ],
+    budget: [
+      'Ориентир по бюджету принял.',
+      'Рамку по бюджету понял.',
+      'Бюджетный диапазон учёл.'
+    ],
+    area: [
+      'Понял параметры по площади, бюджет лучше уточнить отдельно.',
+      'Контекст по площадям вижу, финансовый ориентир уточним отдельно.',
+      'По площади всё ясно, бюджет давайте зафиксируем отдельно.'
+    ],
+    handoff: [
+      'Контекста уже достаточно для передачи менеджеру.',
+      'Данных хватает, передаю дальше в работу менеджеру.',
+      'Этого объёма информации достаточно для handoff менеджеру.'
+    ],
+    progress: [
+      'Понял, продолжаем по сути проекта.',
+      'Хорошо, двигаемся дальше по деталям.',
+      'Контекст понятен, иду к следующему уточнению.'
+    ]
+  },
+  uk: {
+    contact: [
+      'Чудово, контакт вже є.',
+      'Прийняв, дані для зв’язку зафіксовано.',
+      'Дякую, контакт збережено для менеджера.'
+    ],
+    timeline: [
+      'За термінами запуску все зрозуміло.',
+      'Орієнтир за часом врахував.',
+      'Терміни прийняв, рухаємось далі.'
+    ],
+    budget: [
+      'Орієнтир бюджету прийняв.',
+      'Рамку бюджету зрозумів.',
+      'Бюджетний діапазон врахував.'
+    ],
+    area: [
+      'Контекст площі зрозумілий, бюджет краще уточнити окремо.',
+      'Параметри площі бачу, фінансовий орієнтир уточнимо окремо.',
+      'За площею все ясно, бюджет зафіксуємо окремо.'
+    ],
+    handoff: [
+      'Контексту вже достатньо для передачі менеджеру.',
+      'Даних вистачає, передаю менеджеру в роботу.',
+      'Цього обсягу інформації достатньо для handoff менеджеру.'
+    ],
+    progress: [
+      'Зрозумів, рухаємось по суті проєкту.',
+      'Добре, переходимо до наступного уточнення.',
+      'Контекст ясний, продовжуємо далі.'
+    ]
+  },
+  'sr-ME': {
+    contact: [
+      'Odlično, kontakt već imamo.',
+      'U redu, podaci za kontakt su sačuvani.',
+      'Hvala, kontakt je zabilježen za menadžera.'
+    ],
+    timeline: [
+      'Rok pokretanja je jasan.',
+      'Vremenski okvir sam uzeo u obzir.',
+      'Rok je prihvaćen, idemo dalje.'
+    ],
+    budget: [
+      'Budžetski okvir je prihvaćen.',
+      'Razumio sam okvir budžeta.',
+      'Budžetski raspon je uzet u obzir.'
+    ],
+    area: [
+      'Parametri površine su jasni, budžet je bolje potvrditi odvojeno.',
+      'Kontekst površine je jasan, finansijski okvir ćemo potvrditi odvojeno.',
+      'Površina je jasna, budžet ćemo precizirati posebno.'
+    ],
+    handoff: [
+      'Imamo dovoljno konteksta za predaju menadžeru.',
+      'Podataka je dovoljno, predajem menadžeru u obradu.',
+      'Ovaj nivo detalja je dovoljan za handoff menadžeru.'
+    ],
+    progress: [
+      'Razumio sam, nastavljamo suštinu projekta.',
+      'U redu, idemo dalje kroz detalje.',
+      'Kontekst je jasan, prelazimo na sledeće pojašnjenje.'
+    ]
+  },
+  en: {
+    contact: [
+      'Great, we already have your contact.',
+      'Understood, contact details are in place.',
+      'Thanks, contact information is saved for the manager.'
+    ],
+    timeline: [
+      'Got it on the launch timeline.',
+      'I captured the timing expectations.',
+      'Timeline noted, moving forward.'
+    ],
+    budget: [
+      'Got your budget direction.',
+      'I captured the budget range.',
+      'Budget frame is clear, moving on.'
+    ],
+    area: [
+      'The area context is clear; budget should be confirmed separately.',
+      'I captured the area constraints, and we should clarify budget separately.',
+      'Area details are clear, budget is better confirmed separately.'
+    ],
+    handoff: [
+      'We already have enough context for manager handoff.',
+      'The brief is detailed enough to pass to a manager.',
+      'This level of detail is sufficient for handoff.'
+    ],
+    progress: [
+      'Understood, let us continue with project details.',
+      'Clear context, moving to the next clarification.',
+      'Got it, continuing the brief flow.'
+    ]
   }
-  if (cleaned.length <= maxLength) {
-    return cleaned;
+};
+
+function chooseGracefulVariant(params: {
+  locale: Locale;
+  signalType: GracefulSignalType;
+  recentAssistantAnswers: string[];
+}): string {
+  const variants = GRACEFUL_SIGNAL_VARIANTS[params.locale][params.signalType];
+  for (const variant of variants) {
+    const repeated = params.recentAssistantAnswers.some((previous) =>
+      similarity(previous, variant) >= 0.66 || previous.toLowerCase().includes(variant.toLowerCase())
+    );
+    if (!repeated) {
+      return variant;
+    }
   }
-  return `${cleaned.slice(0, maxLength - 1).trimEnd()}…`;
+  const indexSeed = params.recentAssistantAnswers.join('|').length;
+  return variants[indexSeed % variants.length];
 }
 
 function buildGracefulSignalSummary(params: {
   locale: Locale;
-  message: string;
   hasContact: boolean;
   hasTimeline: boolean;
   hasBudget: boolean;
   hasAreaWithoutBudget: boolean;
   handoffReady: boolean;
+  recentAssistantAnswers: string[];
 }): string {
-  const snippet = buildMessageSnippet(params.message);
   if (params.locale === 'ru') {
     if (params.hasContact) {
-      return 'Контакт увидел, добавил в заявку.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'contact', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasAreaWithoutBudget) {
-      return 'Понял контекст по площади, финансовый ориентир отдельно не фиксирую.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'area', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasTimeline) {
-      return 'По срокам запуска всё отметил в брифе.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'timeline', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasBudget) {
-      return 'Ориентир по бюджету отметил в брифе.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'budget', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.handoffReady) {
-      return 'Деталей уже достаточно для передачи менеджеру.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'handoff', recentAssistantAnswers: params.recentAssistantAnswers});
     }
-    return snippet ? `Контекст зафиксировал: «${snippet}».` : 'Контекст зафиксировал.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'progress', recentAssistantAnswers: params.recentAssistantAnswers});
   }
   if (params.locale === 'uk') {
     if (params.hasContact) {
-      return 'Контакт бачу, додав до заявки.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'contact', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasAreaWithoutBudget) {
-      return 'Зрозумів контекст щодо площі, фінансовий орієнтир окремо не фіксую.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'area', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasTimeline) {
-      return 'За термінами запуску все зафіксував у брифі.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'timeline', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasBudget) {
-      return 'Бюджетний орієнтир зафіксував у брифі.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'budget', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.handoffReady) {
-      return 'Даних вже достатньо для передачі менеджеру.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'handoff', recentAssistantAnswers: params.recentAssistantAnswers});
     }
-    return snippet ? `Контекст зафіксував: «${snippet}».` : 'Контекст зафіксував.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'progress', recentAssistantAnswers: params.recentAssistantAnswers});
   }
   if (params.locale === 'sr-ME') {
     if (params.hasContact) {
-      return 'Kontakt sam vidio i dodao u prijavu.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'contact', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasAreaWithoutBudget) {
-      return 'Razumio sam kontekst površine, budžet ne bilježim bez jasne potvrde.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'area', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasTimeline) {
-      return 'Rok lansiranja je zabilježen u brief-u.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'timeline', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.hasBudget) {
-      return 'Budžetski okvir sam zabilježio u brief-u.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'budget', recentAssistantAnswers: params.recentAssistantAnswers});
     }
     if (params.handoffReady) {
-      return 'Imamo dovoljno podataka za predaju menadžeru.';
+      return chooseGracefulVariant({locale: params.locale, signalType: 'handoff', recentAssistantAnswers: params.recentAssistantAnswers});
     }
-    return snippet ? `Kontekst je zabilježen: "${snippet}".` : 'Kontekst je zabilježen.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'progress', recentAssistantAnswers: params.recentAssistantAnswers});
   }
   if (params.hasContact) {
-    return 'I captured your contact and added it to the brief.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'contact', recentAssistantAnswers: params.recentAssistantAnswers});
   }
   if (params.hasAreaWithoutBudget) {
-    return 'I captured the area context and kept budget separate until it is explicit.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'area', recentAssistantAnswers: params.recentAssistantAnswers});
   }
   if (params.hasTimeline) {
-    return 'I noted the launch timeline in the brief.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'timeline', recentAssistantAnswers: params.recentAssistantAnswers});
   }
   if (params.hasBudget) {
-    return 'I noted the budget range in the brief.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'budget', recentAssistantAnswers: params.recentAssistantAnswers});
   }
   if (params.handoffReady) {
-    return 'We already have enough detail to hand this to a manager.';
+    return chooseGracefulVariant({locale: params.locale, signalType: 'handoff', recentAssistantAnswers: params.recentAssistantAnswers});
   }
-  return snippet ? `I captured this context: "${snippet}".` : 'I captured the context.';
+  return chooseGracefulVariant({locale: params.locale, signalType: 'progress', recentAssistantAnswers: params.recentAssistantAnswers});
 }
 
 function getQuestionSlotOrder(deferContactUntilBriefComplete = false): QuestionSlot[] {
@@ -1236,22 +1516,22 @@ function getNonRepeatingLead(locale: Locale): string {
 function buildGracefulFailAnswer(params: {
   locale: Locale;
   topicGuard: TopicGuard;
-  message: string;
   hasContact: boolean;
   hasTimeline: boolean;
   hasBudget: boolean;
   hasAreaWithoutBudget: boolean;
   handoffReady: boolean;
+  recentAssistantAnswers: string[];
 }): string {
   const prefix = buildGuardPrefix(params.locale, params.topicGuard);
   const summary = buildGracefulSignalSummary({
     locale: params.locale,
-    message: params.message,
     hasContact: params.hasContact,
     hasTimeline: params.hasTimeline,
     hasBudget: params.hasBudget,
     hasAreaWithoutBudget: params.hasAreaWithoutBudget,
-    handoffReady: params.handoffReady
+    handoffReady: params.handoffReady,
+    recentAssistantAnswers: params.recentAssistantAnswers
   });
   return trimForAnswer([prefix, summary].filter(Boolean).join(' '));
 }
@@ -1291,25 +1571,47 @@ async function requestStructuredReply(params: {
   userPrompt: string;
   path: string;
   stage: string;
+  timeoutMs?: number;
 }): Promise<{
-  parsed: ReturnType<typeof aiReplySchema.safeParse>;
+  parsed: StructuredAiReply | null;
   content: string;
-} | null> {
+  recoverableReason: LlmDeferReason | null;
+  parseFailReason: ParseFailReason;
+  jsonRepairUsed: boolean;
+  requestId: string | null;
+  latencyMs: number;
+  tokenCapHit: boolean;
+}> {
   if (!client) {
-    return null;
+    return {
+      parsed: null,
+      content: '',
+      recoverableReason: 'connection',
+      parseFailReason: 'timeout',
+      jsonRepairUsed: false,
+      requestId: null,
+      latencyMs: 0,
+      tokenCapHit: false
+    };
   }
   const startedAt = Date.now();
   try {
-    const completion = await client.chat.completions.create({
+    const completion = await client.chat.completions.parse({
       model: params.model,
       messages: [
         {role: 'system', content: params.systemPrompt},
         {role: 'developer', content: params.developerPrompt},
         {role: 'user', content: params.userPrompt}
       ],
+      response_format: zodResponseFormat(aiReplySchema, 'ai_reply'),
       max_completion_tokens: params.maxOutputTokens
+    }, {
+      timeout: params.timeoutMs ?? OPENAI_REPLY_TIMEOUT_MS,
+      maxRetries: OPENAI_MAX_RETRIES
     });
     const usage = completion.usage;
+    const latencyMs = Date.now() - startedAt;
+    const tokenCapHit = (usage?.completion_tokens ?? 0) >= Math.max(params.maxOutputTokens - 2, 1);
     console.info('[ai] OpenAI usage', {
       path: params.path,
       stage: params.stage,
@@ -1319,14 +1621,66 @@ async function requestStructuredReply(params: {
       outputTokens: usage?.completion_tokens ?? null,
       totalTokens: usage?.total_tokens ?? null,
       requestId: (completion as {_request_id?: string})._request_id ?? null,
-      latencyMs: Date.now() - startedAt
+      latencyMs,
+      tokenCapHit
     });
     const content = completion.choices[0]?.message?.content ?? '';
+    const parsed = completion.choices[0]?.message?.parsed ?? null;
+    if (parsed) {
+      return {
+        parsed,
+        content,
+        recoverableReason: null,
+        parseFailReason: null,
+        jsonRepairUsed: false,
+        requestId: (completion as {_request_id?: string})._request_id ?? null,
+        latencyMs,
+        tokenCapHit
+      };
+    }
+
+    if (content) {
+      const repaired = tryLocalJsonRepair(content);
+      if (repaired.parsed.success) {
+        return {
+          parsed: repaired.parsed.data,
+          content,
+          recoverableReason: null,
+          parseFailReason: null,
+          jsonRepairUsed: repaired.usedRepair,
+          requestId: (completion as {_request_id?: string})._request_id ?? null,
+          latencyMs,
+          tokenCapHit
+        };
+      }
+    }
+
     return {
-      parsed: aiReplySchema.safeParse(safeJsonParse(content)),
-      content
+      parsed: null,
+      content,
+      recoverableReason: null,
+      parseFailReason: 'invalid_json',
+      jsonRepairUsed: false,
+      requestId: (completion as {_request_id?: string})._request_id ?? null,
+      latencyMs,
+      tokenCapHit
     };
   } catch (error) {
+    const latencyMs = Date.now() - startedAt;
+    const parseFailReason = classifyParseFailReason(error);
+    if (parseFailReason) {
+      return {
+        parsed: null,
+        content: '',
+        recoverableReason: null,
+        parseFailReason,
+        jsonRepairUsed: false,
+        requestId: null,
+        latencyMs,
+        tokenCapHit: parseFailReason === 'length_limit'
+      };
+    }
+
     if (isRecoverableOpenAiError(error)) {
       if (error instanceof OpenAI.APIError) {
         console.warn('[ai] Recoverable OpenAI error while requesting structured reply', {
@@ -1344,7 +1698,16 @@ async function requestStructuredReply(params: {
           model: params.model
         });
       }
-      return null;
+      return {
+        parsed: null,
+        content: '',
+        recoverableReason: classifyRecoverableReason(error),
+        parseFailReason: classifyParseFailReason(error),
+        jsonRepairUsed: false,
+        requestId: null,
+        latencyMs,
+        tokenCapHit: false
+      };
     }
     throw error;
   }
@@ -1357,9 +1720,10 @@ async function requestTextReply(params: {
   messages: Array<{role: 'system' | 'developer' | 'user'; content: string}>;
   path: string;
   stage: string;
-}): Promise<string | null> {
+  timeoutMs?: number;
+}): Promise<{text: string | null; recoverableReason: LlmDeferReason | null}> {
   if (!client) {
-    return null;
+    return {text: null, recoverableReason: 'connection'};
   }
   const startedAt = Date.now();
   try {
@@ -1367,6 +1731,9 @@ async function requestTextReply(params: {
       model: params.model,
       messages: params.messages,
       max_completion_tokens: params.maxOutputTokens
+    }, {
+      timeout: params.timeoutMs ?? OPENAI_REPLY_TIMEOUT_MS,
+      maxRetries: OPENAI_MAX_RETRIES
     });
     const usage = completion.usage;
     console.info('[ai] OpenAI usage', {
@@ -1380,7 +1747,7 @@ async function requestTextReply(params: {
       requestId: (completion as {_request_id?: string})._request_id ?? null,
       latencyMs: Date.now() - startedAt
     });
-    return cleanText(completion.choices[0]?.message?.content ?? null);
+    return {text: cleanText(completion.choices[0]?.message?.content ?? null), recoverableReason: null};
   } catch (error) {
     if (isRecoverableOpenAiError(error)) {
       if (error instanceof OpenAI.APIError) {
@@ -1399,7 +1766,10 @@ async function requestTextReply(params: {
           model: params.model
         });
       }
-      return null;
+      return {
+        text: null,
+        recoverableReason: classifyRecoverableReason(error)
+      };
     }
     throw error;
   }
@@ -1414,6 +1784,18 @@ function toScopedResponse(params: {
   identityState: 'unverified' | 'pending_match' | 'verified';
   memoryLoaded: boolean;
   verificationHint?: string;
+  fallbackModelUsed?: boolean;
+  gracefulFailUsed?: boolean;
+  rephraseUsed?: boolean;
+  templateBlockTriggered?: boolean;
+  repetitionScore?: number | null;
+  llmReplyDeferred?: boolean;
+  deferReason?: LlmDeferReason | null;
+  llmCallsCount?: number;
+  jsonRepairUsed?: boolean;
+  sameModelFallbackSkipped?: boolean;
+  parseFailReason?: ParseFailReason;
+  replyLatencyMs?: number | null;
 }): ChatResponse {
   if (params.topicGuard !== 'allowed') {
     return {
@@ -1428,7 +1810,20 @@ function toScopedResponse(params: {
       identityState: params.identityState,
       memoryLoaded: params.memoryLoaded,
       verificationHint: params.verificationHint,
-      dialogMode: params.topicGuard === 'disallowed' ? 'disallowed' : 'scope_clarify'
+      dialogMode: params.topicGuard === 'disallowed' ? 'disallowed' : 'scope_clarify',
+      fallbackModelUsed: params.fallbackModelUsed ?? false,
+      gracefulFailUsed: params.gracefulFailUsed ?? false,
+      rephraseUsed: params.rephraseUsed ?? false,
+      templateBlockTriggered: params.templateBlockTriggered ?? false,
+      repetitionScore: params.repetitionScore ?? null,
+      llmReplyDeferred: params.llmReplyDeferred ?? false,
+      deferReason: params.deferReason ?? null,
+      topicGuard: params.topicGuard,
+      llmCallsCount: params.llmCallsCount ?? 0,
+      jsonRepairUsed: params.jsonRepairUsed ?? false,
+      sameModelFallbackSkipped: params.sameModelFallbackSkipped ?? false,
+      parseFailReason: params.parseFailReason ?? null,
+      replyLatencyMs: params.replyLatencyMs ?? null
     };
   }
 
@@ -1444,7 +1839,20 @@ function toScopedResponse(params: {
     identityState: params.identityState,
     memoryLoaded: params.memoryLoaded,
     verificationHint: params.verificationHint,
-    dialogMode: 'context_continuation'
+    dialogMode: 'context_continuation',
+    fallbackModelUsed: params.fallbackModelUsed ?? false,
+    gracefulFailUsed: params.gracefulFailUsed ?? false,
+    rephraseUsed: params.rephraseUsed ?? false,
+    templateBlockTriggered: params.templateBlockTriggered ?? false,
+    repetitionScore: params.repetitionScore ?? null,
+    llmReplyDeferred: params.llmReplyDeferred ?? false,
+    deferReason: params.deferReason ?? null,
+    topicGuard: params.topicGuard,
+    llmCallsCount: params.llmCallsCount ?? 0,
+    jsonRepairUsed: params.jsonRepairUsed ?? false,
+    sameModelFallbackSkipped: params.sameModelFallbackSkipped ?? false,
+    parseFailReason: params.parseFailReason ?? null,
+    replyLatencyMs: params.replyLatencyMs ?? null
   };
 }
 
@@ -1458,6 +1866,16 @@ function buildGracefulFallbackResponse(params: {
   briefContext?: BriefContext;
   channel: 'web' | 'telegram' | 'instagram' | 'facebook' | 'whatsapp';
   topicGuard: TopicGuard;
+  deferReason?: LlmDeferReason | null;
+  fallbackModelUsed?: boolean;
+  rephraseUsed?: boolean;
+  templateBlockTriggered?: boolean;
+  repetitionScore?: number | null;
+  llmCallsCount?: number;
+  jsonRepairUsed?: boolean;
+  sameModelFallbackSkipped?: boolean;
+  parseFailReason?: ParseFailReason;
+  replyLatencyMs?: number | null;
 }): ChatResponse {
   const meta = getConversationMeta({
     locale: params.locale,
@@ -1472,16 +1890,20 @@ function buildGracefulFallbackResponse(params: {
   const hasTimeline = Boolean(currentTurnSignals.timelineHint);
   const hasBudget = Boolean(currentTurnSignals.budgetHint) && !hasAmbiguousNumericBudgetContext(params.message);
   const hasAreaWithoutBudget = hasAmbiguousNumericBudgetContext(params.message) && !hasBudget;
+  const recentAssistantAnswers = params.history
+    .filter((item) => item.role === 'assistant')
+    .slice(-2)
+    .map((item) => item.content);
   const nextQuestion = params.topicGuard === 'allowed' ? meta.nextQuestion : scopeClarifyPrompt[params.locale];
   const base = buildGracefulFailAnswer({
     locale: params.locale,
     topicGuard: params.topicGuard,
-    message: params.message,
     hasContact,
     hasTimeline,
     hasBudget,
     hasAreaWithoutBudget,
-    handoffReady: meta.brief.handoffReady
+    handoffReady: meta.brief.handoffReady,
+    recentAssistantAnswers
   });
   const constrained = applyAnswerConstraints({
     answer: base,
@@ -1491,10 +1913,6 @@ function buildGracefulFallbackResponse(params: {
     verificationHint: params.verificationHint,
     handoffReady: params.topicGuard === 'allowed' && meta.brief.handoffReady
   });
-  const recentAssistantAnswers = params.history
-    .filter((item) => item.role === 'assistant')
-    .slice(-2)
-    .map((item) => item.content);
   const repetitionScore = maxSimilarityToRecent(constrained, recentAssistantAnswers);
   const adjusted = repetitionScore >= REPLY_REPETITION_THRESHOLD
     ? ensureTargetQuestion(getNonRepeatingLead(params.locale), nextQuestion)
@@ -1517,42 +1935,96 @@ function buildGracefulFallbackResponse(params: {
     meta,
     identityState: params.identityState,
     memoryLoaded: params.memoryLoaded ?? false,
-    verificationHint: params.verificationHint
+    verificationHint: params.verificationHint,
+    fallbackModelUsed: params.fallbackModelUsed ?? false,
+    gracefulFailUsed: true,
+    rephraseUsed: params.rephraseUsed ?? false,
+    templateBlockTriggered: params.templateBlockTriggered ?? true,
+    repetitionScore: params.repetitionScore ?? repetitionScore,
+    llmReplyDeferred: true,
+    deferReason: params.deferReason ?? 'connection',
+    llmCallsCount: params.llmCallsCount ?? 0,
+    jsonRepairUsed: params.jsonRepairUsed ?? false,
+    sameModelFallbackSkipped: params.sameModelFallbackSkipped ?? false,
+    parseFailReason: params.parseFailReason ?? null,
+    replyLatencyMs: params.replyLatencyMs ?? null
   });
 }
 
-export type LowCostContextReply = {
+export type GeneratedReplyDiagnostics = {
   answer: string;
   usedLlm: boolean;
   fallbackModelUsed: boolean;
   gracefulFailUsed: boolean;
   rephraseUsed: boolean;
+  templateBlockTriggered: boolean;
+  repetitionScore: number | null;
+  llmReplyDeferred: boolean;
+  deferReason: LlmDeferReason | null;
 };
+
+export type LowCostContextReply = GeneratedReplyDiagnostics;
+export type HandoffTerminalReply = GeneratedReplyDiagnostics;
+
+function pickNonRepeatingVariant(variants: string[], recentAssistantAnswers: string[]): string {
+  for (const variant of variants) {
+    const repeated = recentAssistantAnswers.some((previous) =>
+      similarity(previous, variant) >= 0.66 || previous.toLowerCase().includes(variant.toLowerCase())
+    );
+    if (!repeated) {
+      return variant;
+    }
+  }
+  const indexSeed = recentAssistantAnswers.join('|').length;
+  return variants[indexSeed % variants.length];
+}
 
 function buildLowCostGracefulAnswer(params: {
   locale: Locale;
-  message: string;
   remainingMessages: number;
+  recentAssistantAnswers: string[];
 }): string {
-  const snippet = buildMessageSnippet(params.message, 72);
+  const baseVariants: Record<Locale, string[]> = {
+    ru: [
+      'Уточнение учёл, команда менеджера уже смотрит заявку.',
+      'Деталь добавил, менеджер уже в процессе.',
+      'Принял это уточнение, заявка уже у менеджера в работе.'
+    ],
+    uk: [
+      'Уточнення врахував, команда менеджера вже переглядає заявку.',
+      'Деталь додав, менеджер вже в процесі.',
+      'Прийняв це уточнення, заявка вже в менеджера в роботі.'
+    ],
+    'sr-ME': [
+      'Pojašnjenje je dodato, menadžer već obrađuje zahtjev.',
+      'Detalj je unijet, menadžer je već u toku.',
+      'Primio sam ovo pojašnjenje, zahtjev je već kod menadžera.'
+    ],
+    en: [
+      'Clarification added, the manager is already reviewing your request.',
+      'I noted this detail, and a manager is already on it.',
+      'Thanks, this update is recorded and the manager is already processing it.'
+    ]
+  };
+  const base = pickNonRepeatingVariant(baseVariants[params.locale], params.recentAssistantAnswers);
   if (params.locale === 'ru') {
     return params.remainingMessages > 0
-      ? `Уточнение добавил в заявку: «${snippet}». Менеджер уже в работе, можно отправить ещё ${params.remainingMessages} уточнение.`
-      : `Уточнение добавил в заявку: «${snippet}». Менеджер уже в работе.`;
+      ? `${base} Можно отправить ещё ${params.remainingMessages} уточнение.`
+      : base;
   }
   if (params.locale === 'uk') {
     return params.remainingMessages > 0
-      ? `Уточнення додав до заявки: «${snippet}». Менеджер вже в роботі, можна надіслати ще ${params.remainingMessages} уточнення.`
-      : `Уточнення додав до заявки: «${snippet}». Менеджер вже в роботі.`;
+      ? `${base} Можна надіслати ще ${params.remainingMessages} уточнення.`
+      : base;
   }
   if (params.locale === 'sr-ME') {
     return params.remainingMessages > 0
-      ? `Pojašnjenje je dodato u zahtjev: "${snippet}". Menadžer je već u obradi, možete poslati još ${params.remainingMessages} pojašnjenje.`
-      : `Pojašnjenje je dodato u zahtjev: "${snippet}". Menadžer je već u obradi.`;
+      ? `${base} Možete poslati još ${params.remainingMessages} pojašnjenje.`
+      : base;
   }
   return params.remainingMessages > 0
-    ? `I added your clarification to the request: "${snippet}". A manager is already reviewing it, and you can send ${params.remainingMessages} more clarification.`
-    : `I added your clarification to the request: "${snippet}". A manager is already reviewing it.`;
+    ? `${base} You can send ${params.remainingMessages} more clarification.`
+    : base;
 }
 
 export async function generateLowCostContextReply(params: {
@@ -1567,12 +2039,20 @@ export async function generateLowCostContextReply(params: {
     .slice(-2)
     .map((item) => item.content);
 
-  const graceful = (): LowCostContextReply => ({
-    answer: trimForAnswer(buildLowCostGracefulAnswer(params)),
+  const graceful = (reason: LlmDeferReason = 'connection', templateBlockTriggered = false, repetitionScore: number | null = null): LowCostContextReply => ({
+    answer: trimForAnswer(buildLowCostGracefulAnswer({
+      locale: params.locale,
+      remainingMessages: params.remainingMessages,
+      recentAssistantAnswers
+    })),
     usedLlm: false,
     fallbackModelUsed: false,
     gracefulFailUsed: true,
-    rephraseUsed: false
+    rephraseUsed: false,
+    templateBlockTriggered,
+    repetitionScore,
+    llmReplyDeferred: true,
+    deferReason: reason
   });
 
   if (!client) {
@@ -1591,8 +2071,8 @@ export async function generateLowCostContextReply(params: {
     'Avoid repeating opening words from recent assistant replies.'
   ].join('\n\n');
 
-  const tryReply = async (model: string, stage: string): Promise<string | null> => {
-    return requestTextReply({
+  const tryReply = async (model: string, stage: string): Promise<{text: string | null; reason: LlmDeferReason | null}> => {
+    const result = await requestTextReply({
       conversationId: params.conversationId,
       model,
       maxOutputTokens: Math.min(FALLBACK_MAX_OUTPUT_TOKENS, 180),
@@ -1604,24 +2084,36 @@ export async function generateLowCostContextReply(params: {
         {role: 'user', content: userPrompt}
       ]
     });
+    return {
+      text: result.text,
+      reason: result.recoverableReason
+    };
   };
 
   let usedModel = FAST_MODEL;
-  let answer = await tryReply(FAST_MODEL, 'low_cost_primary');
+  let deferReason: LlmDeferReason | null = null;
+  let attempt = await tryReply(FAST_MODEL, 'low_cost_primary');
+  let answer = attempt.text;
+  deferReason = attempt.reason ?? deferReason;
   let fallbackModelUsed = false;
   if (!answer) {
     fallbackModelUsed = true;
     usedModel = FALLBACK_MODEL;
-    answer = await tryReply(FALLBACK_MODEL, 'low_cost_fallback');
+    attempt = await tryReply(FALLBACK_MODEL, 'low_cost_fallback');
+    answer = attempt.text;
+    deferReason = attempt.reason ?? deferReason;
   }
   if (!answer) {
-    return graceful();
+    return graceful(deferReason ?? 'connection');
   }
 
   let composed = trimForAnswer(answer);
-  const repetitionScore = maxSimilarityToRecent(composed, recentAssistantAnswers);
+  let repetitionScore = maxSimilarityToRecent(composed, recentAssistantAnswers);
   let rephraseUsed = false;
-  if (repetitionScore >= REPLY_REPETITION_THRESHOLD || templateLikeAnswer(composed, recentAssistantAnswers)) {
+  const templateBlockTriggered = repetitionScore >= REPLY_REPETITION_THRESHOLD
+    || templateLikeAnswer(composed, recentAssistantAnswers)
+    || containsBannedPhrase(params.locale, composed);
+  if (templateBlockTriggered) {
     const rephrased = await requestTextReply({
       conversationId: params.conversationId,
       model: usedModel,
@@ -1634,10 +2126,14 @@ export async function generateLowCostContextReply(params: {
         {role: 'user', content: `Recent replies:\n${recentAssistantAnswers.join('\n') || '(none)'}\n\nOriginal answer:\n${composed}`}
       ]
     });
-    if (!rephrased) {
-      return graceful();
+    if (!rephrased.text) {
+      return graceful(rephrased.recoverableReason ?? deferReason ?? 'connection', true, repetitionScore);
     }
-    composed = trimForAnswer(rephrased);
+    composed = trimForAnswer(rephrased.text);
+    repetitionScore = maxSimilarityToRecent(composed, recentAssistantAnswers);
+    if (containsBannedPhrase(params.locale, composed)) {
+      return graceful('parse_error', true, repetitionScore);
+    }
     rephraseUsed = true;
   }
 
@@ -1646,7 +2142,163 @@ export async function generateLowCostContextReply(params: {
     usedLlm: true,
     fallbackModelUsed,
     gracefulFailUsed: false,
-    rephraseUsed
+    rephraseUsed,
+    templateBlockTriggered,
+    repetitionScore,
+    llmReplyDeferred: false,
+    deferReason: null
+  };
+}
+
+function buildHandoffTerminalGracefulAnswer(params: {
+  locale: Locale;
+  cooldownHours: number;
+  recentAssistantAnswers: string[];
+}): string {
+  const variants: Record<Locale, string[]> = {
+    ru: [
+      `Передал заявку менеджеру, команда уже начала работу. Следующее сообщение в чате будет доступно через ${params.cooldownHours} часа.`,
+      `Заявка уже у менеджера и обработка запущена. Написать в этот чат снова можно через ${params.cooldownHours} часа.`,
+      `Лид передан менеджеру, работа начата. Следующее сообщение в чате станет доступно через ${params.cooldownHours} часа.`
+    ],
+    uk: [
+      `Заявку передано менеджеру, команда вже почала роботу. Наступне повідомлення в чаті буде доступне через ${params.cooldownHours} години.`,
+      `Заявка вже у менеджера і обробку запущено. Написати в цей чат знову можна через ${params.cooldownHours} години.`,
+      `Лід передано менеджеру, роботу розпочато. Наступне повідомлення в чаті стане доступним через ${params.cooldownHours} години.`
+    ],
+    'sr-ME': [
+      `Zahtjev je predat menadžeru i obrada je već počela. Sledeća poruka u chatu biće dostupna za ${params.cooldownHours} sata.`,
+      `Prijava je već kod menadžera i tim je krenuo sa obradom. U chat možete pisati ponovo za ${params.cooldownHours} sata.`,
+      `Lead je proslijeđen menadžeru, posao je pokrenut. Sledeća poruka u chatu biće dostupna za ${params.cooldownHours} sata.`
+    ],
+    en: [
+      `Your request is now with the manager and processing has started. The next message in this chat will be available in ${params.cooldownHours} hours.`,
+      `The lead has been handed to a manager and work is in progress. You can send the next message in this chat in ${params.cooldownHours} hours.`,
+      `A manager has received your request and started processing it. The next message in this chat will be available in ${params.cooldownHours} hours.`
+    ]
+  };
+  return pickNonRepeatingVariant(variants[params.locale], params.recentAssistantAnswers);
+}
+
+export async function generateHandoffTerminalReply(params: {
+  locale: Locale;
+  history: ChatMessage[];
+  conversationId?: string;
+  cooldownHours?: number;
+}): Promise<HandoffTerminalReply> {
+  const cooldownHours = Math.max(1, Math.round(params.cooldownHours ?? 3));
+  const recentAssistantAnswers = params.history
+    .filter((item) => item.role === 'assistant')
+    .slice(-2)
+    .map((item) => item.content);
+
+  const graceful = (
+    reason: LlmDeferReason = 'connection',
+    templateBlockTriggered = false,
+    repetitionScore: number | null = null
+  ): HandoffTerminalReply => ({
+    answer: trimForAnswer(buildHandoffTerminalGracefulAnswer({
+      locale: params.locale,
+      cooldownHours,
+      recentAssistantAnswers
+    })),
+    usedLlm: false,
+    fallbackModelUsed: false,
+    gracefulFailUsed: true,
+    rephraseUsed: false,
+    templateBlockTriggered,
+    repetitionScore,
+    llmReplyDeferred: true,
+    deferReason: reason
+  });
+
+  if (!client) {
+    return graceful('connection');
+  }
+
+  const userPrompt = [
+    `Locale=${params.locale}.`,
+    `Cooldown hours=${cooldownHours}.`,
+    `Recent assistant replies:\n${recentAssistantAnswers.join('\n') || '(none)'}`,
+    'Write exactly 2 short sentences in a natural human style.',
+    'Sentence 1 must say the request is handed to manager and processing started.',
+    `Sentence 2 must say the next message in this chat is available in ${cooldownHours} hours.`,
+    'Avoid canned opening phrases and avoid repeating previous opening clauses.'
+  ].join('\n\n');
+
+  const tryReply = async (model: string, stage: string): Promise<{text: string | null; reason: LlmDeferReason | null}> => {
+    const result = await requestTextReply({
+      conversationId: params.conversationId,
+      model,
+      maxOutputTokens: Math.min(FALLBACK_MAX_OUTPUT_TOKENS, 180),
+      path: 'chat/handoff_terminal',
+      stage,
+      messages: [
+        {role: 'system', content: 'Write natural client-facing handoff confirmation. No templates. Plain text only.'},
+        {role: 'developer', content: 'Do not output JSON or markdown. Keep it to 2 short sentences.'},
+        {role: 'user', content: userPrompt}
+      ]
+    });
+    return {text: result.text, reason: result.recoverableReason};
+  };
+
+  let usedModel = FAST_MODEL;
+  let deferReason: LlmDeferReason | null = null;
+  let attempt = await tryReply(FAST_MODEL, 'handoff_terminal_primary');
+  let answer = attempt.text;
+  deferReason = attempt.reason ?? deferReason;
+  let fallbackModelUsed = false;
+  if (!answer) {
+    fallbackModelUsed = true;
+    usedModel = FALLBACK_MODEL;
+    attempt = await tryReply(FALLBACK_MODEL, 'handoff_terminal_fallback');
+    answer = attempt.text;
+    deferReason = attempt.reason ?? deferReason;
+  }
+  if (!answer) {
+    return graceful(deferReason ?? 'connection');
+  }
+
+  let composed = trimForAnswer(answer);
+  let repetitionScore = maxSimilarityToRecent(composed, recentAssistantAnswers);
+  let rephraseUsed = false;
+  const templateBlockTriggered = repetitionScore >= REPLY_REPETITION_THRESHOLD
+    || templateLikeAnswer(composed, recentAssistantAnswers)
+    || containsBannedPhrase(params.locale, composed);
+  if (templateBlockTriggered) {
+    const rephrased = await requestTextReply({
+      conversationId: params.conversationId,
+      model: usedModel,
+      maxOutputTokens: REPHRASE_MAX_OUTPUT_TOKENS,
+      path: 'chat/handoff_terminal',
+      stage: 'handoff_terminal_rephrase',
+      messages: [
+        {role: 'system', content: 'Rewrite the handoff message to sound human and non-repetitive.'},
+        {role: 'developer', content: 'Keep two short sentences, plain text only.'},
+        {role: 'user', content: `Recent replies:\n${recentAssistantAnswers.join('\n') || '(none)'}\n\nOriginal answer:\n${composed}`}
+      ]
+    });
+    if (!rephrased.text) {
+      return graceful(rephrased.recoverableReason ?? deferReason ?? 'connection', true, repetitionScore);
+    }
+    composed = trimForAnswer(rephrased.text);
+    repetitionScore = maxSimilarityToRecent(composed, recentAssistantAnswers);
+    if (containsBannedPhrase(params.locale, composed)) {
+      return graceful('parse_error', true, repetitionScore);
+    }
+    rephraseUsed = true;
+  }
+
+  return {
+    answer: composed,
+    usedLlm: true,
+    fallbackModelUsed,
+    gracefulFailUsed: false,
+    rephraseUsed,
+    templateBlockTriggered,
+    repetitionScore,
+    llmReplyDeferred: false,
+    deferReason: null
   };
 }
 
@@ -1659,6 +2311,10 @@ export async function generateAgencyReply(params: {
   memoryLoaded?: boolean;
   verificationHint?: string;
   briefContext?: BriefContext;
+  deferState?: {
+    llmReplyDeferred?: boolean;
+    deferReason?: LlmDeferReason | null;
+  };
   channel: 'web' | 'telegram' | 'instagram' | 'facebook' | 'whatsapp';
 }): Promise<ChatResponse> {
   const {locale, message, history} = params;
@@ -1675,9 +2331,13 @@ export async function generateAgencyReply(params: {
   });
   const topicGuard = getTopicGuard(message, meta.conversationInScope);
   const inputHistory = history.slice(-HISTORY_WINDOW).map((item) => `${item.role}: ${item.content}`).join('\n');
+  const compactHistory = history.slice(-BYPASS_HISTORY_WINDOW).map((item) => `${item.role}: ${item.content}`).join('\n');
   const currentSignals = extractLeadSignals({history: [], message});
+  const userAnsweredIntent = detectAnsweredIntentFromHistory({message, history});
+  const turnStartedAt = Date.now();
   const shouldBypassModel =
     params.channel === 'web' &&
+    !params.deferState?.llmReplyDeferred &&
     isShortFactReply(message) &&
     !hasAmbiguousNumericBudgetContext(message) &&
     isQualificationQuestion(getLastAssistantQuestion(history)) &&
@@ -1693,7 +2353,8 @@ export async function generateAgencyReply(params: {
       ...params,
       locale: replyLocale,
       identityState,
-      topicGuard
+      topicGuard,
+      deferReason: 'connection'
     });
   }
 
@@ -1717,30 +2378,58 @@ export async function generateAgencyReply(params: {
     'Do not include additional keys.'
   ].join(' ');
 
-  const buildUserPrompt = (retryInstruction?: string) => [
-    `Session locale=${locale}. Preferred reply locale=${replyLocale}.`,
-    `topicGuard=${topicGuard}.`,
-    `Current missing brief fields: ${meta.brief.missingFields.join(', ') || 'none'}.`,
-    `serviceClarifyActive=${meta.serviceClarifyActive}. serviceFamily=${meta.serviceFamily}. serviceDetailScore=${meta.serviceDetailScore}.`,
-    `serviceClarifyQuestion=${meta.serviceClarifyNextQuestion ?? 'none'}.`,
-    `identityState=${identityState}. memoryLoaded=${memoryLoaded}.`,
-    `verificationHint=${params.verificationHint ?? 'none'}.`,
-    `deterministicNextQuestion=${meta.nextQuestion}.`,
-    `briefContext=${JSON.stringify({
-      serviceType: meta.mergedDraft.serviceType,
-      primaryGoal: meta.mergedDraft.primaryGoal,
-      timelineHint: meta.mergedDraft.timelineHint,
-      budgetHint: meta.mergedDraft.budgetHint,
-      referralSource: meta.mergedDraft.referralSource,
-      hasConversationContact: params.briefContext?.hasConversationContact ?? false
-    })}`,
-    `Conversation context:\n${inputHistory}`,
-    `Current user message:\n${message}`,
-    retryInstruction ? `Retry instruction:\n${retryInstruction}` : '',
-    'Return JSON only.'
-  ].filter(Boolean).join('\n\n');
+  const buildUserPrompt = (retryInstruction?: string) => {
+    if (shouldBypassModel) {
+      return [
+        `Session locale=${locale}. Preferred reply locale=${replyLocale}.`,
+        `topicGuard=${topicGuard}.`,
+        `identityState=${identityState}. memoryLoaded=${memoryLoaded}.`,
+        `userJustAnsweredIntent=${userAnsweredIntent}.`,
+        `Current missing brief fields: ${meta.brief.missingFields.join(', ') || 'none'}.`,
+        `deterministicNextQuestion=${meta.nextQuestion}.`,
+        `Last assistant question=${getLastAssistantQuestion(history) ?? 'none'}.`,
+        `briefContextMinimal=${JSON.stringify({
+          serviceType: meta.mergedDraft.serviceType,
+          timelineHint: meta.mergedDraft.timelineHint,
+          budgetHint: meta.mergedDraft.budgetHint,
+          hasConversationContact: params.briefContext?.hasConversationContact ?? false
+        })}`,
+        `Recent context:\n${compactHistory || '(empty)'}`,
+        `Current user message:\n${message}`,
+        retryInstruction ? `Retry instruction:\n${retryInstruction}` : '',
+        'Return JSON only.'
+      ].filter(Boolean).join('\n\n');
+    }
+
+    return [
+      `Session locale=${locale}. Preferred reply locale=${replyLocale}.`,
+      `topicGuard=${topicGuard}.`,
+      `Current missing brief fields: ${meta.brief.missingFields.join(', ') || 'none'}.`,
+      `serviceClarifyActive=${meta.serviceClarifyActive}. serviceFamily=${meta.serviceFamily}. serviceDetailScore=${meta.serviceDetailScore}.`,
+      `serviceClarifyQuestion=${meta.serviceClarifyNextQuestion ?? 'none'}.`,
+      `identityState=${identityState}. memoryLoaded=${memoryLoaded}.`,
+      `userJustAnsweredIntent=${userAnsweredIntent}.`,
+      `verificationHint=${params.verificationHint ?? 'none'}.`,
+      `deterministicNextQuestion=${meta.nextQuestion}.`,
+      `briefContext=${JSON.stringify({
+        serviceType: meta.mergedDraft.serviceType,
+        primaryGoal: meta.mergedDraft.primaryGoal,
+        timelineHint: meta.mergedDraft.timelineHint,
+        budgetHint: meta.mergedDraft.budgetHint,
+        referralSource: meta.mergedDraft.referralSource,
+        hasConversationContact: params.briefContext?.hasConversationContact ?? false
+      })}`,
+      `Conversation context:\n${inputHistory}`,
+      `Current user message:\n${message}`,
+      retryInstruction ? `Retry instruction:\n${retryInstruction}` : '',
+      'Return JSON only.'
+    ].filter(Boolean).join('\n\n');
+  };
 
   const attemptStructured = async (model: string, maxOutputTokens: number, stage: string, retryInstruction?: string) => {
+    const timeoutMs = stage === 'fallback_model' || stage === 'repair_call'
+      ? OPENAI_REPLY_FALLBACK_TIMEOUT_MS
+      : OPENAI_REPLY_TIMEOUT_MS;
     return requestStructuredReply({
       conversationId: params.conversationId,
       model,
@@ -1749,7 +2438,8 @@ export async function generateAgencyReply(params: {
       developerPrompt,
       userPrompt: buildUserPrompt(retryInstruction),
       path: 'chat/message',
-      stage
+      stage,
+      timeoutMs
     });
   };
 
@@ -1763,20 +2453,54 @@ export async function generateAgencyReply(params: {
     let gracefulFailUsed = false;
     let rephraseUsed = false;
     let templateBlockTriggered = false;
+    let llmCallsCount = 0;
+    let jsonRepairUsed = false;
+    let sameModelFallbackSkipped = false;
+    let parseFailReason: ParseFailReason = null;
 
     const primaryAttempt = await attemptStructured(primaryModel, primaryMaxOutputTokens, 'primary');
-    let parsedReply = primaryAttempt?.parsed.success ? primaryAttempt.parsed.data : null;
+    llmCallsCount += 1;
+    jsonRepairUsed = jsonRepairUsed || primaryAttempt.jsonRepairUsed;
+    parseFailReason = primaryAttempt.parseFailReason;
+    let parsedReply = primaryAttempt.parsed;
+    let deferReason: LlmDeferReason | null = primaryAttempt.recoverableReason;
     let modelUsed = primaryModel;
 
-    if (!parsedReply) {
-      fallbackModelUsed = true;
-      const fallbackAttempt = await attemptStructured(
-        FALLBACK_MODEL,
-        Math.max(FALLBACK_MAX_OUTPUT_TOKENS, primaryMaxOutputTokens),
-        'fallback_model'
+    if (
+      !parsedReply
+      && !deferReason
+      && (parseFailReason === 'invalid_json' || parseFailReason === 'length_limit')
+    ) {
+      const repairAttempt = await attemptStructured(
+        primaryModel,
+        Math.min(Math.max(primaryMaxOutputTokens, 120), 180),
+        'repair_call',
+        'Return a compact strict JSON object only. No extra keys.'
       );
-      parsedReply = fallbackAttempt?.parsed.success ? fallbackAttempt.parsed.data : null;
-      modelUsed = FALLBACK_MODEL;
+      llmCallsCount += 1;
+      jsonRepairUsed = jsonRepairUsed || repairAttempt.jsonRepairUsed;
+      parseFailReason = repairAttempt.parseFailReason;
+      parsedReply = repairAttempt.parsed;
+      deferReason = repairAttempt.recoverableReason ?? deferReason;
+    }
+
+    if (!parsedReply) {
+      if (FALLBACK_MODEL === primaryModel) {
+        sameModelFallbackSkipped = true;
+      } else {
+        fallbackModelUsed = true;
+        const fallbackAttempt = await attemptStructured(
+          FALLBACK_MODEL,
+          Math.max(FALLBACK_MAX_OUTPUT_TOKENS, primaryMaxOutputTokens),
+          'fallback_model'
+        );
+        llmCallsCount += 1;
+        jsonRepairUsed = jsonRepairUsed || fallbackAttempt.jsonRepairUsed;
+        parseFailReason = fallbackAttempt.parseFailReason;
+        parsedReply = fallbackAttempt.parsed;
+        deferReason = fallbackAttempt.recoverableReason ?? deferReason;
+        modelUsed = FALLBACK_MODEL;
+      }
     }
 
     if (!parsedReply) {
@@ -1785,7 +2509,16 @@ export async function generateAgencyReply(params: {
         ...params,
         locale: replyLocale,
         identityState,
-        topicGuard
+        topicGuard,
+        deferReason: deferReason ?? 'parse_error',
+        fallbackModelUsed,
+        rephraseUsed,
+        templateBlockTriggered: true,
+        llmCallsCount,
+        jsonRepairUsed,
+        sameModelFallbackSkipped,
+        parseFailReason,
+        replyLatencyMs: Date.now() - turnStartedAt
       });
       console.info('[ai] reply summary', {
         path: 'chat/message',
@@ -1795,7 +2528,15 @@ export async function generateAgencyReply(params: {
         gracefulFailUsed,
         rephraseUsed,
         repetitionScore: null,
-        template_block_triggered: true
+        template_block_triggered: true,
+        llmReplyDeferred: graceful.llmReplyDeferred ?? true,
+        deferReason: graceful.deferReason ?? deferReason ?? 'parse_error',
+        topicGuard,
+        llm_calls_count_per_turn: llmCallsCount,
+        json_repair_used: jsonRepairUsed,
+        same_model_fallback_skipped: sameModelFallbackSkipped,
+        parse_fail_reason: parseFailReason,
+        reply_latency_ms: Date.now() - turnStartedAt
       });
       return graceful;
     }
@@ -1817,24 +2558,33 @@ export async function generateAgencyReply(params: {
       handoffReady: normalizedTopic === 'allowed' && meta.brief.handoffReady
     });
 
-    const similarityScore = maxSimilarityToRecent(composedAnswer, lastAssistantAnswers);
-    const shouldRephrase = similarityScore >= REPLY_REPETITION_THRESHOLD
-      || shouldRetryTemplateAnswer({
-        answer: composedAnswer,
-        lastAssistantAnswers,
-        highIntent: meta.highIntent,
-        handoffReady: meta.brief.handoffReady,
-        message
-      });
+    let repetitionScore = maxSimilarityToRecent(composedAnswer, lastAssistantAnswers);
+    const shouldRephrase = containsBannedPhrase(replyLocale, composedAnswer)
+      || (
+        shouldBypassModel
+          ? repetitionScore >= Math.max(0.9, REPLY_REPETITION_THRESHOLD + 0.12)
+          : (
+            repetitionScore >= REPLY_REPETITION_THRESHOLD
+            || shouldRetryTemplateAnswer({
+              answer: composedAnswer,
+              lastAssistantAnswers,
+              highIntent: meta.highIntent,
+              handoffReady: meta.brief.handoffReady,
+              message
+            })
+          )
+      );
     templateBlockTriggered = shouldRephrase;
 
     if (shouldRephrase) {
+      llmCallsCount += 1;
       const rephrased = await requestTextReply({
         conversationId: params.conversationId,
         model: modelUsed,
         maxOutputTokens: REPHRASE_MAX_OUTPUT_TOKENS,
         path: 'chat/message',
         stage: 'rephrase',
+        timeoutMs: OPENAI_REPLY_FALLBACK_TIMEOUT_MS,
         messages: [
           {role: 'system', content: 'Rewrite assistant reply to be natural and non-repetitive while preserving intent and locale.'},
           {role: 'developer', content: 'Output plain text only. Keep 2-4 short sentences and max one question.'},
@@ -1849,13 +2599,23 @@ export async function generateAgencyReply(params: {
           }
         ]
       });
-      if (!rephrased) {
+      if (!rephrased.text) {
         gracefulFailUsed = true;
         const graceful = buildGracefulFallbackResponse({
           ...params,
           locale: replyLocale,
           identityState,
-          topicGuard: normalizedTopic
+          topicGuard: normalizedTopic,
+          deferReason: rephrased.recoverableReason ?? deferReason ?? 'connection',
+          fallbackModelUsed,
+          rephraseUsed,
+          templateBlockTriggered,
+          repetitionScore,
+          llmCallsCount,
+          jsonRepairUsed,
+          sameModelFallbackSkipped,
+          parseFailReason,
+          replyLatencyMs: Date.now() - turnStartedAt
         });
         console.info('[ai] reply summary', {
           path: 'chat/message',
@@ -1864,20 +2624,70 @@ export async function generateAgencyReply(params: {
           fallbackModelUsed,
           gracefulFailUsed,
           rephraseUsed,
-          repetitionScore: similarityScore,
-          template_block_triggered: templateBlockTriggered
+          repetitionScore,
+          template_block_triggered: templateBlockTriggered,
+          llmReplyDeferred: graceful.llmReplyDeferred ?? true,
+          deferReason: graceful.deferReason ?? rephrased.recoverableReason ?? deferReason ?? 'connection',
+          topicGuard: normalizedTopic,
+          llm_calls_count_per_turn: llmCallsCount,
+          json_repair_used: jsonRepairUsed,
+          same_model_fallback_skipped: sameModelFallbackSkipped,
+          parse_fail_reason: parseFailReason,
+          reply_latency_ms: Date.now() - turnStartedAt
         });
         return graceful;
       }
       rephraseUsed = true;
       composedAnswer = applyAnswerConstraints({
-        answer: rephrased,
+        answer: rephrased.text,
         topicGuard: normalizedTopic,
         locale: replyLocale,
         nextQuestion: meta.nextQuestion,
         verificationHint: params.verificationHint,
         handoffReady: normalizedTopic === 'allowed' && meta.brief.handoffReady
       });
+      repetitionScore = maxSimilarityToRecent(composedAnswer, lastAssistantAnswers);
+      if (containsBannedPhrase(replyLocale, composedAnswer)) {
+        gracefulFailUsed = true;
+        const graceful = buildGracefulFallbackResponse({
+          ...params,
+          locale: replyLocale,
+          identityState,
+          topicGuard: normalizedTopic,
+          deferReason: 'parse_error',
+          fallbackModelUsed,
+          rephraseUsed,
+          templateBlockTriggered: true,
+          repetitionScore,
+          llmCallsCount,
+          jsonRepairUsed,
+          sameModelFallbackSkipped,
+          parseFailReason: 'invalid_json',
+          replyLatencyMs: Date.now() - turnStartedAt
+        });
+        return graceful;
+      }
+    }
+
+    if (containsBannedPhrase(replyLocale, composedAnswer)) {
+      gracefulFailUsed = true;
+      const graceful = buildGracefulFallbackResponse({
+        ...params,
+        locale: replyLocale,
+        identityState,
+        topicGuard: normalizedTopic,
+        deferReason: 'parse_error',
+        fallbackModelUsed,
+        rephraseUsed,
+        templateBlockTriggered: true,
+        repetitionScore,
+        llmCallsCount,
+        jsonRepairUsed,
+        sameModelFallbackSkipped,
+        parseFailReason: 'invalid_json',
+        replyLatencyMs: Date.now() - turnStartedAt
+      });
+      return graceful;
     }
 
     composedAnswer = maybeAddressByName({
@@ -1893,8 +2703,16 @@ export async function generateAgencyReply(params: {
       fallbackModelUsed,
       gracefulFailUsed,
       rephraseUsed,
-      repetitionScore: similarityScore,
-      template_block_triggered: templateBlockTriggered
+      repetitionScore,
+      template_block_triggered: templateBlockTriggered,
+      llmReplyDeferred: false,
+      deferReason: null,
+      topicGuard: normalizedTopic,
+      llm_calls_count_per_turn: llmCallsCount,
+      json_repair_used: jsonRepairUsed,
+      same_model_fallback_skipped: sameModelFallbackSkipped,
+      parse_fail_reason: parseFailReason,
+      reply_latency_ms: Date.now() - turnStartedAt
     });
 
     return toScopedResponse({
@@ -1905,7 +2723,19 @@ export async function generateAgencyReply(params: {
       meta,
       identityState,
       memoryLoaded,
-      verificationHint: params.verificationHint
+      verificationHint: params.verificationHint,
+      fallbackModelUsed,
+      gracefulFailUsed,
+      rephraseUsed,
+      templateBlockTriggered: templateBlockTriggered,
+      repetitionScore,
+      llmReplyDeferred: false,
+      deferReason: null,
+      llmCallsCount,
+      jsonRepairUsed,
+      sameModelFallbackSkipped,
+      parseFailReason,
+      replyLatencyMs: Date.now() - turnStartedAt
     });
   } catch (error) {
     if (isRecoverableOpenAiError(error)) {
@@ -1913,7 +2743,8 @@ export async function generateAgencyReply(params: {
         ...params,
         locale: replyLocale,
         identityState,
-        topicGuard
+        topicGuard,
+        deferReason: classifyRecoverableReason(error)
       });
     }
     console.error('[ai] Unexpected error in generateAgencyReply, returning graceful fallback', {
@@ -1924,7 +2755,8 @@ export async function generateAgencyReply(params: {
       ...params,
       locale: replyLocale,
       identityState,
-      topicGuard
+      topicGuard,
+      deferReason: 'connection'
     });
   }
 }

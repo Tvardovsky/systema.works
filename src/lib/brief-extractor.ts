@@ -47,19 +47,41 @@ export type BriefExtractionResult = {
 };
 
 const EXTRACT_MODEL = process.env.OPENAI_QUALITY_MODEL ?? 'gpt-5-mini';
-const EXTRACT_MAX_OUTPUT_TOKENS = Math.max(320, Number.parseInt(process.env.OPENAI_EXTRACT_MAX_OUTPUT_TOKENS ?? '1200', 10) || 1200);
-const EXTRACT_HISTORY_WINDOW = Math.max(4, Number.parseInt(process.env.OPENAI_EXTRACT_HISTORY_WINDOW ?? '16', 10) || 16);
+const OPENAI_MAX_RETRIES = Math.max(0, Number.parseInt(process.env.OPENAI_MAX_RETRIES ?? '0', 10) || 0);
+const EXTRACT_TIMEOUT_MS = Math.max(2500, Number.parseInt(process.env.OPENAI_EXTRACT_TIMEOUT_MS ?? '7000', 10) || 7000);
+const EXTRACT_MAX_OUTPUT_TOKENS = Math.max(240, Number.parseInt(process.env.OPENAI_EXTRACT_MAX_OUTPUT_TOKENS ?? '700', 10) || 700);
+const EXTRACT_HISTORY_WINDOW = Math.max(4, Number.parseInt(process.env.OPENAI_EXTRACT_HISTORY_WINDOW ?? '12', 10) || 12);
+const EXTRACT_FAST_MAX_OUTPUT_TOKENS = Math.max(
+  180,
+  Number.parseInt(process.env.OPENAI_EXTRACT_FAST_MAX_OUTPUT_TOKENS ?? '380', 10) || 380
+);
+const EXTRACT_FAST_HISTORY_WINDOW = Math.max(
+  3,
+  Math.min(
+    EXTRACT_HISTORY_WINDOW,
+    Number.parseInt(process.env.OPENAI_EXTRACT_FAST_HISTORY_WINDOW ?? '6', 10) || 6
+  )
+);
 const EXTRACT_CONFIDENCE_THRESHOLD = Math.max(0.5, Math.min(0.95, Number.parseFloat(process.env.OPENAI_EXTRACT_CONFIDENCE_THRESHOLD ?? '0.72') || 0.72));
 const EXTRACT_RETRY_OUTPUT_TOKENS = Math.max(
-  EXTRACT_MAX_OUTPUT_TOKENS + 600,
-  Number.parseInt(process.env.OPENAI_EXTRACT_RETRY_MAX_OUTPUT_TOKENS ?? `${EXTRACT_MAX_OUTPUT_TOKENS + 600}`, 10) || EXTRACT_MAX_OUTPUT_TOKENS + 600
+  EXTRACT_MAX_OUTPUT_TOKENS + 250,
+  Number.parseInt(process.env.OPENAI_EXTRACT_RETRY_MAX_OUTPUT_TOKENS ?? `${EXTRACT_MAX_OUTPUT_TOKENS + 250}`, 10) || EXTRACT_MAX_OUTPUT_TOKENS + 250
+);
+const EXTRACT_FAST_RETRY_OUTPUT_TOKENS = Math.max(
+  EXTRACT_FAST_MAX_OUTPUT_TOKENS + 180,
+  Number.parseInt(
+    process.env.OPENAI_EXTRACT_FAST_RETRY_MAX_OUTPUT_TOKENS ?? `${EXTRACT_FAST_MAX_OUTPUT_TOKENS + 180}`,
+    10
+  ) || EXTRACT_FAST_MAX_OUTPUT_TOKENS + 180
 );
 
 const client = process.env.OPENAI_API_KEY
   ? new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
       project: process.env.OPENAI_PROJECT_ID || undefined,
-      organization: process.env.OPENAI_ORG_ID || undefined
+      organization: process.env.OPENAI_ORG_ID || undefined,
+      maxRetries: OPENAI_MAX_RETRIES,
+      timeout: EXTRACT_TIMEOUT_MS
     })
   : null;
 
@@ -199,6 +221,18 @@ function isExtractionEmpty(fields: BriefExtractionFields): boolean {
   return Object.values(fields).every((value) => !cleanText(value));
 }
 
+function isShortFollowupMessage(message: string): boolean {
+  const normalized = cleanText(message) ?? '';
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.includes('\n')) {
+    return false;
+  }
+  const words = normalized.split(/\s+/).filter(Boolean);
+  return normalized.length <= 120 && words.length <= 18;
+}
+
 function toDeterministicResult(params: {
   deterministicSignals: LeadSignals;
   hasAreaContext: boolean;
@@ -302,16 +336,23 @@ export async function extractBriefSignals(params: {
   history: ChatMessage[];
   conversationId?: string;
 }): Promise<BriefExtractionResult> {
+  const turnStartedAt = Date.now();
   const deterministicSignals = extractLeadSignalsDeterministic({
     history: params.history,
     message: params.message
   });
-  const contextMessages = params.history.slice(-EXTRACT_HISTORY_WINDOW);
+  const useFastProfile = isShortFollowupMessage(params.message);
+  const selectedHistoryWindow = useFastProfile ? EXTRACT_FAST_HISTORY_WINDOW : EXTRACT_HISTORY_WINDOW;
+  const selectedMaxOutputTokens = useFastProfile ? EXTRACT_FAST_MAX_OUTPUT_TOKENS : EXTRACT_MAX_OUTPUT_TOKENS;
+  const selectedRetryMaxOutputTokens = useFastProfile ? EXTRACT_FAST_RETRY_OUTPUT_TOKENS : EXTRACT_RETRY_OUTPUT_TOKENS;
+  const contextMessages = params.history.slice(-selectedHistoryWindow);
   const fullContextText = [
     ...contextMessages.map((item) => `${item.role}: ${item.content}`),
     `user: ${params.message}`
   ].join('\n');
   const hasAreaContext = hasAreaSignal(fullContextText);
+  let llmCallsCount = 0;
+  let tokenCapHit = false;
 
   if (!client) {
     return toDeterministicResult({
@@ -340,7 +381,7 @@ export async function extractBriefSignals(params: {
     params.message
   ].join('\n');
 
-  const buildParsedCompletion = async (maxCompletionTokens: number): Promise<ExtractionPayload | null> => {
+  const buildParsedCompletion = async (maxCompletionTokens: number): Promise<{parsed: ExtractionPayload | null; tokenCapHit: boolean}> => {
     const startedAt = Date.now();
     const completion = await client.chat.completions.parse({
       model: EXTRACT_MODEL,
@@ -350,9 +391,15 @@ export async function extractBriefSignals(params: {
       ],
       response_format: zodResponseFormat(extractionSchema, 'brief_extraction'),
       max_completion_tokens: maxCompletionTokens
+    }, {
+      timeout: EXTRACT_TIMEOUT_MS,
+      maxRetries: OPENAI_MAX_RETRIES
     });
 
     const usage = completion.usage;
+    const completionTokenCapHit = (usage?.completion_tokens ?? 0) >= Math.max(maxCompletionTokens - 2, 1);
+    llmCallsCount += 1;
+    tokenCapHit = tokenCapHit || completionTokenCapHit;
     console.info('[brief_extractor] OpenAI usage', {
       path: 'chat/message',
       conversationId: params.conversationId ?? 'unknown',
@@ -362,18 +409,36 @@ export async function extractBriefSignals(params: {
       totalTokens: usage?.total_tokens ?? null,
       requestId: (completion as {_request_id?: string})._request_id ?? null,
       latencyMs: Date.now() - startedAt,
-      maxCompletionTokens
+      maxCompletionTokens,
+      tokenCapHit: completionTokenCapHit,
+      profile: useFastProfile ? 'fast' : 'full'
     });
 
-    return completion.choices[0]?.message.parsed ?? null;
+    return {
+      parsed: completion.choices[0]?.message.parsed ?? null,
+      tokenCapHit: completionTokenCapHit
+    };
   };
 
   try {
-    let parsed = await buildParsedCompletion(EXTRACT_MAX_OUTPUT_TOKENS);
+    let parseFailReason: 'length_limit' | 'invalid_json' | null = null;
+    let parsedResult = await buildParsedCompletion(selectedMaxOutputTokens);
+    let parsed = parsedResult.parsed;
     if (!parsed) {
-      parsed = await buildParsedCompletion(EXTRACT_RETRY_OUTPUT_TOKENS);
+      parseFailReason = 'invalid_json';
+      parsedResult = await buildParsedCompletion(selectedRetryMaxOutputTokens);
+      parsed = parsedResult.parsed;
     }
     if (!parsed) {
+      console.info('[brief_extractor] turn summary', {
+        conversationId: params.conversationId ?? 'unknown',
+        model: EXTRACT_MODEL,
+        deterministicFallback: true,
+        llm_calls_count_per_turn: llmCallsCount,
+        parse_fail_reason: parseFailReason,
+        token_cap_hit: tokenCapHit,
+        extract_latency_ms: Date.now() - turnStartedAt
+      });
       return toDeterministicResult({
         deterministicSignals,
         hasAreaContext
@@ -385,12 +450,30 @@ export async function extractBriefSignals(params: {
       fullContextText
     });
     if (isExtractionEmpty(normalized.fields)) {
+      console.info('[brief_extractor] turn summary', {
+        conversationId: params.conversationId ?? 'unknown',
+        model: EXTRACT_MODEL,
+        deterministicFallback: true,
+        llm_calls_count_per_turn: llmCallsCount,
+        parse_fail_reason: 'invalid_json',
+        token_cap_hit: tokenCapHit,
+        extract_latency_ms: Date.now() - turnStartedAt
+      });
       return toDeterministicResult({
         deterministicSignals,
         hasAreaContext: normalized.hasAreaContext
       });
     }
 
+    console.info('[brief_extractor] turn summary', {
+      conversationId: params.conversationId ?? 'unknown',
+      model: EXTRACT_MODEL,
+      deterministicFallback: false,
+      llm_calls_count_per_turn: llmCallsCount,
+      parse_fail_reason: null,
+      token_cap_hit: tokenCapHit,
+      extract_latency_ms: Date.now() - turnStartedAt
+    });
     return {
       fields: normalized.fields,
       evidence: normalized.evidence,
@@ -410,16 +493,27 @@ export async function extractBriefSignals(params: {
         console.warn('[brief_extractor] Length-limited parse, retrying with increased max tokens', {
           conversationId: params.conversationId ?? 'unknown',
           model: EXTRACT_MODEL,
-          retryMaxCompletionTokens: EXTRACT_RETRY_OUTPUT_TOKENS
+          retryMaxCompletionTokens: selectedRetryMaxOutputTokens,
+          profile: useFastProfile ? 'fast' : 'full'
         });
 
-        const parsed = await buildParsedCompletion(EXTRACT_RETRY_OUTPUT_TOKENS);
+        const retryResult = await buildParsedCompletion(selectedRetryMaxOutputTokens);
+        const parsed = retryResult.parsed;
         if (parsed) {
           const normalized = enforceStrictNoGuess({
             payload: parsed,
             fullContextText
           });
           if (!isExtractionEmpty(normalized.fields)) {
+            console.info('[brief_extractor] turn summary', {
+              conversationId: params.conversationId ?? 'unknown',
+              model: EXTRACT_MODEL,
+              deterministicFallback: false,
+              llm_calls_count_per_turn: llmCallsCount,
+              parse_fail_reason: null,
+              token_cap_hit: tokenCapHit,
+              extract_latency_ms: Date.now() - turnStartedAt
+            });
             return {
               fields: normalized.fields,
               evidence: normalized.evidence,
@@ -448,6 +542,15 @@ export async function extractBriefSignals(params: {
           });
         }
       }
+      console.info('[brief_extractor] turn summary', {
+        conversationId: params.conversationId ?? 'unknown',
+        model: EXTRACT_MODEL,
+        deterministicFallback: true,
+        llm_calls_count_per_turn: llmCallsCount,
+        parse_fail_reason: 'length_limit',
+        token_cap_hit: tokenCapHit,
+        extract_latency_ms: Date.now() - turnStartedAt
+      });
       return toDeterministicResult({
         deterministicSignals,
         hasAreaContext
@@ -461,6 +564,15 @@ export async function extractBriefSignals(params: {
           requestId: error.requestID
         });
       }
+      console.info('[brief_extractor] turn summary', {
+        conversationId: params.conversationId ?? 'unknown',
+        model: EXTRACT_MODEL,
+        deterministicFallback: true,
+        llm_calls_count_per_turn: llmCallsCount,
+        parse_fail_reason: null,
+        token_cap_hit: tokenCapHit,
+        extract_latency_ms: Date.now() - turnStartedAt
+      });
       return toDeterministicResult({
         deterministicSignals,
         hasAreaContext

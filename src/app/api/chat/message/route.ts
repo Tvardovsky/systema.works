@@ -45,12 +45,25 @@ import {
   readWebChatLifecycle
 } from '@/lib/web-chat-lifecycle';
 
+type AiRuntimeDeferReason = 'quota' | 'rate_limit' | 'connection' | 'parse_error';
+
 function cleanText(input?: string | null): string | null {
   if (!input) {
     return null;
   }
   const normalized = input.trim().replace(/\s+/g, ' ');
   return normalized || null;
+}
+
+function mergeAiRuntimeMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+  aiRuntime: {llmReplyDeferred: boolean; deferReason: AiRuntimeDeferReason | null}
+): Record<string, unknown> {
+  const base = metadata && typeof metadata === 'object' ? {...metadata} : {};
+  return {
+    ...base,
+    aiRuntime
+  };
 }
 
 function preferRichText(existing?: string | null, candidate?: string | null, minCandidateLength = 16): string | null {
@@ -152,7 +165,11 @@ export async function buildLowCostAssistantAnswer(params: {
     llmBypassed: !lowCostReply.usedLlm,
     fallbackModelUsed: lowCostReply.fallbackModelUsed,
     gracefulFailUsed: lowCostReply.gracefulFailUsed,
-    rephraseUsed: lowCostReply.rephraseUsed
+    rephraseUsed: lowCostReply.rephraseUsed,
+    templateBlockTriggered: lowCostReply.templateBlockTriggered,
+    repetitionScore: lowCostReply.repetitionScore,
+    llmReplyDeferred: lowCostReply.llmReplyDeferred,
+    deferReason: lowCostReply.deferReason
   };
 }
 
@@ -317,9 +334,15 @@ async function handleLowCostWebMessage(params: {
 
   await updateConversationMetadata({
     conversationId: params.conversation.id,
-    metadata: mergeWebChatLifecycleMetadata(
-      (params.conversation.metadata ?? null) as Record<string, unknown> | null,
-      nextLifecycle
+    metadata: mergeAiRuntimeMetadata(
+      mergeWebChatLifecycleMetadata(
+        (params.conversation.metadata ?? null) as Record<string, unknown> | null,
+        nextLifecycle
+      ),
+      {
+        llmReplyDeferred: lowCostAssistant.llmReplyDeferred,
+        deferReason: lowCostAssistant.deferReason ?? null
+      }
     )
   });
 
@@ -334,6 +357,10 @@ async function handleLowCostWebMessage(params: {
       fallbackModelUsed: lowCostAssistant.fallbackModelUsed,
       gracefulFailUsed: lowCostAssistant.gracefulFailUsed,
       rephraseUsed: lowCostAssistant.rephraseUsed,
+      templateBlockTriggered: lowCostAssistant.templateBlockTriggered,
+      repetitionScore: lowCostAssistant.repetitionScore,
+      llmReplyDeferred: lowCostAssistant.llmReplyDeferred,
+      deferReason: lowCostAssistant.deferReason ?? null,
       chatLocked,
       cooldownUntil: cooldownUntil ?? null,
       retryAfterSeconds: retryAfterSeconds || null
@@ -354,6 +381,10 @@ async function handleLowCostWebMessage(params: {
       fallbackModelUsed: lowCostAssistant.fallbackModelUsed,
       gracefulFailUsed: lowCostAssistant.gracefulFailUsed,
       rephraseUsed: lowCostAssistant.rephraseUsed,
+      templateBlockTriggered: lowCostAssistant.templateBlockTriggered,
+      repetitionScore: lowCostAssistant.repetitionScore,
+      llmReplyDeferred: lowCostAssistant.llmReplyDeferred,
+      deferReason: lowCostAssistant.deferReason ?? null,
       chatMode,
       chatLocked,
       cooldownUntil: cooldownUntil ?? null,
@@ -385,7 +416,11 @@ async function handleLowCostWebMessage(params: {
     llmBypassed: lowCostAssistant.llmBypassed,
     fallbackModelUsed: lowCostAssistant.fallbackModelUsed,
     gracefulFailUsed: lowCostAssistant.gracefulFailUsed,
-    rephraseUsed: lowCostAssistant.rephraseUsed
+    rephraseUsed: lowCostAssistant.rephraseUsed,
+    templateBlockTriggered: lowCostAssistant.templateBlockTriggered,
+    repetitionScore: lowCostAssistant.repetitionScore,
+    llmReplyDeferred: lowCostAssistant.llmReplyDeferred,
+    deferReason: lowCostAssistant.deferReason ?? null
   };
 }
 
@@ -652,6 +687,51 @@ export async function POST(request: NextRequest) {
     retryAfterSeconds: typeof result.metadata?.retryAfterSeconds === 'number' ? Number(result.metadata?.retryAfterSeconds) : undefined,
     remainingLowCostMessages: typeof result.metadata?.remainingLowCostMessages === 'number'
       ? Number(result.metadata?.remainingLowCostMessages)
+      : undefined,
+    fallbackModelUsed: typeof result.metadata?.fallbackModelUsed === 'boolean'
+      ? Boolean(result.metadata?.fallbackModelUsed)
+      : undefined,
+    gracefulFailUsed: typeof result.metadata?.gracefulFailUsed === 'boolean'
+      ? Boolean(result.metadata?.gracefulFailUsed)
+      : undefined,
+    rephraseUsed: typeof result.metadata?.rephraseUsed === 'boolean'
+      ? Boolean(result.metadata?.rephraseUsed)
+      : undefined,
+    templateBlockTriggered: typeof result.metadata?.templateBlockTriggered === 'boolean'
+      ? Boolean(result.metadata?.templateBlockTriggered)
+      : undefined,
+    repetitionScore: typeof result.metadata?.repetitionScore === 'number'
+      ? Number(result.metadata?.repetitionScore)
+      : undefined,
+    topicGuard: typeof result.metadata?.topicGuard === 'string'
+      ? String(result.metadata?.topicGuard)
+      : undefined,
+    llmReplyDeferred: typeof result.metadata?.llmReplyDeferred === 'boolean'
+      ? Boolean(result.metadata?.llmReplyDeferred)
+      : undefined,
+    deferReason: typeof result.metadata?.deferReason === 'string'
+      ? String(result.metadata?.deferReason)
+      : undefined,
+    llmCallsCount: typeof result.metadata?.llmCallsCount === 'number'
+      ? Number(result.metadata?.llmCallsCount)
+      : undefined,
+    jsonRepairUsed: typeof result.metadata?.jsonRepairUsed === 'boolean'
+      ? Boolean(result.metadata?.jsonRepairUsed)
+      : undefined,
+    sameModelFallbackSkipped: typeof result.metadata?.sameModelFallbackSkipped === 'boolean'
+      ? Boolean(result.metadata?.sameModelFallbackSkipped)
+      : undefined,
+    parseFailReason: typeof result.metadata?.parseFailReason === 'string'
+      ? String(result.metadata?.parseFailReason)
+      : undefined,
+    extractLatencyMs: typeof result.metadata?.extractLatencyMs === 'number'
+      ? Number(result.metadata?.extractLatencyMs)
+      : undefined,
+    replyLatencyMs: typeof result.metadata?.replyLatencyMs === 'number'
+      ? Number(result.metadata?.replyLatencyMs)
+      : undefined,
+    turnLatencyMsTotal: typeof result.metadata?.turnLatencyMsTotal === 'number'
+      ? Number(result.metadata?.turnLatencyMsTotal)
       : undefined
   });
   if (result.metadata?.chatLocked && result.metadata?.cooldownUntil) {

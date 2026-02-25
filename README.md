@@ -29,14 +29,21 @@ OPENAI_QUALITY_MODEL=gpt-5.2
 OPENAI_FALLBACK_MODEL=gpt-5-mini
 OPENAI_PROJECT_ID=
 OPENAI_ORG_ID=
+OPENAI_MAX_RETRIES=0
+OPENAI_REPLY_TIMEOUT_MS=8000
+OPENAI_REPLY_FALLBACK_TIMEOUT_MS=5000
 OPENAI_MAX_OUTPUT_TOKENS=360
 OPENAI_FALLBACK_MAX_OUTPUT_TOKENS=280
 OPENAI_REPHRASE_MAX_OUTPUT_TOKENS=220
 OPENAI_REPLY_REPETITION_THRESHOLD=0.74
 OPENAI_HISTORY_WINDOW=10
-OPENAI_EXTRACT_MAX_OUTPUT_TOKENS=1200
-OPENAI_EXTRACT_RETRY_MAX_OUTPUT_TOKENS=1800
-OPENAI_EXTRACT_HISTORY_WINDOW=16
+OPENAI_EXTRACT_TIMEOUT_MS=7000
+OPENAI_EXTRACT_MAX_OUTPUT_TOKENS=700
+OPENAI_EXTRACT_RETRY_MAX_OUTPUT_TOKENS=950
+OPENAI_EXTRACT_HISTORY_WINDOW=12
+OPENAI_EXTRACT_FAST_MAX_OUTPUT_TOKENS=380
+OPENAI_EXTRACT_FAST_RETRY_MAX_OUTPUT_TOKENS=560
+OPENAI_EXTRACT_FAST_HISTORY_WINDOW=6
 OPENAI_EXTRACT_CONFIDENCE_THRESHOLD=0.72
 
 NEXT_PUBLIC_TURNSTILE_SITE_KEY=
@@ -53,6 +60,14 @@ META_APP_SECRET=
 
 RETENTION_DAYS=180
 ```
+
+Notes:
+- `OPENAI_REPLY_REPETITION_THRESHOLD` controls anti-repeat blocking for normal/low-cost/handoff terminal replies.
+- `OPENAI_REPLY_FALLBACK_TIMEOUT_MS` is used for repair/fallback/rephrase stages and should stay lower than primary timeout for balanced latency.
+- If LLM is temporarily unavailable, the app returns a short neutral fallback and stores `aiRuntime.llmReplyDeferred/deferReason` in conversation metadata to force a normal LLM attempt on the next user turn.
+- `OPENAI_MAX_RETRIES=0` + request timeouts reduce long waits in chat turns; fallback model path is handled in app logic.
+- Reply policy is `repair-then-fallback`: local JSON repair first, one compact repair call second, fallback model last; identical fallback model calls are skipped.
+- Fast extractor profile is used automatically for short follow-up messages to reduce latency while keeping LLM extraction enabled.
 
 Optional legacy fallback:
 

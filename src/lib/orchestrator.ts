@@ -1,8 +1,8 @@
 import {randomUUID} from 'crypto';
-import {generateAgencyReply} from '@/lib/ai';
+import {generateAgencyReply, generateHandoffTerminalReply} from '@/lib/ai';
 import {computeLeadBriefState, isHighIntentMessage} from '@/lib/lead-brief';
 import {resolveLeadPriority} from '@/lib/lead';
-import {extractLeadSignals, getQualificationPrompt} from '@/lib/lead-signals';
+import {extractLeadSignals, getQualificationPrompt, hasAreaSignal, hasExplicitBudgetSignal} from '@/lib/lead-signals';
 import {extractBriefSignals} from '@/lib/brief-extractor';
 import {
   appendLeadBriefRevision,
@@ -35,7 +35,6 @@ import {sendManagerAlert} from '@/lib/telegram';
 import {readClientTelemetry} from '@/lib/client-telemetry';
 import {
   buildLockedLifecycle,
-  getHandoffTerminalMessage,
   getRetryAfterSeconds,
   mergeWebChatLifecycleMetadata,
   readWebChatLifecycle
@@ -95,6 +94,42 @@ function cleanText(input?: string | null): string | null {
   }
   const normalized = input.trim().replace(/\s+/g, ' ');
   return normalized || null;
+}
+
+type AiRuntimeDeferReason = 'quota' | 'rate_limit' | 'connection' | 'parse_error';
+
+function readAiRuntimeState(metadata?: Record<string, unknown> | null): {
+  llmReplyDeferred: boolean;
+  deferReason: AiRuntimeDeferReason | null;
+} {
+  const raw = (metadata?.aiRuntime ?? null) as Record<string, unknown> | null;
+  if (!raw || typeof raw !== 'object') {
+    return {llmReplyDeferred: false, deferReason: null};
+  }
+  const deferReasonRaw = typeof raw.deferReason === 'string' ? raw.deferReason : null;
+  const deferReason = (
+    deferReasonRaw === 'quota'
+    || deferReasonRaw === 'rate_limit'
+    || deferReasonRaw === 'connection'
+    || deferReasonRaw === 'parse_error'
+  )
+    ? deferReasonRaw
+    : null;
+  return {
+    llmReplyDeferred: Boolean(raw.llmReplyDeferred),
+    deferReason
+  };
+}
+
+function mergeAiRuntimeMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+  aiRuntime: {llmReplyDeferred: boolean; deferReason: AiRuntimeDeferReason | null}
+): Record<string, unknown> {
+  const base = metadata && typeof metadata === 'object' ? {...metadata} : {};
+  return {
+    ...base,
+    aiRuntime
+  };
 }
 
 export function hasBriefConversationContact(brief: {
@@ -166,6 +201,28 @@ function hasVerificationIntent(text: string): boolean {
     'profil',
     'povez'
   ].some((hint) => lower.includes(hint));
+}
+
+function isTimelineOrBudgetQuestion(text?: string | null): boolean {
+  if (!text) {
+    return false;
+  }
+  const lower = text.toLowerCase();
+  const hints = [
+    'срок',
+    'timeline',
+    'дедлайн',
+    'когда',
+    'budget',
+    'бюдж',
+    'ориентир',
+    'кошторис',
+    'термін',
+    'rok',
+    'budž',
+    'budzet'
+  ];
+  return hints.some((hint) => lower.includes(hint));
 }
 
 function composeBudgetFollowUp(params: {
@@ -450,6 +507,7 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
     ...event,
     platformMessageId: event.platformMessageId || randomUUID()
   };
+  const turnStartedAt = Date.now();
 
   try {
     const enabled = await isChannelEnabled(safeEvent.channel);
@@ -562,17 +620,21 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       getConversationById(activeConversationId),
       getLeadBriefByConversation(activeConversationId)
     ]);
+    const conversationMetadata = ((conversationRow?.metadata ?? null) as Record<string, unknown> | null) ?? {};
+    const deferState = readAiRuntimeState(conversationMetadata);
 
     const syntheticHistory = history
       .filter((item) => item.role === 'user' || item.role === 'assistant')
       .map((item) => ({role: item.role as 'user' | 'assistant', content: item.content}));
 
+    const extractStartedAt = Date.now();
     const briefExtraction = await extractBriefSignals({
       locale,
       message: safeEvent.text,
       history: syntheticHistory,
       conversationId: activeConversationId
     });
+    const extractLatencyMs = Date.now() - extractStartedAt;
     const extractedSignals = briefExtraction.fields;
     if (
       extractedSignals.fullName ||
@@ -717,6 +779,7 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       });
     }
 
+    const replyStartedAt = Date.now();
     let reply = await generateAgencyReply({
       locale,
       message: safeEvent.text,
@@ -726,6 +789,7 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       memoryLoaded: memoryAllowed && Boolean(memory?.summary),
       verificationHint,
       channel: safeEvent.channel,
+      deferState,
       briefContext: {
         fullName: updatedBrief.fullName,
         email: updatedBrief.email,
@@ -743,6 +807,7 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         hasConversationContact
       }
     });
+    const replyLatencyMs = reply.replyLatencyMs ?? (Date.now() - replyStartedAt);
 
     if (requiresFreshWebContact && !hasConversationContact) {
       const dedupedMissing = reply.missingFields.includes('contact')
@@ -756,8 +821,17 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       };
     }
 
+    const lastAssistantQuestion = [...syntheticHistory]
+      .reverse()
+      .find((item) => item.role === 'assistant')?.content;
+    const answeredTimelineOrBudgetQuestion = isTimelineOrBudgetQuestion(lastAssistantQuestion)
+      && Boolean(extractedSignals.timelineHint || extractedSignals.budgetHint);
+
     const shouldClarifyAreaBudget = briefExtraction.shouldAskClarification
       && briefExtraction.clarificationType === 'budget'
+      && hasAreaSignal(safeEvent.text)
+      && !hasExplicitBudgetSignal(safeEvent.text)
+      && !answeredTimelineOrBudgetQuestion
       && !updatedBrief.budgetHint;
     if (shouldClarifyAreaBudget) {
       const dedupedMissing = reply.missingFields.includes('timeline_or_budget')
@@ -828,23 +902,49 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
     let cooldownUntil: string | undefined;
     let retryAfterSeconds: number | undefined;
     let remainingLowCostMessages: number | undefined;
+    let nextConversationMetadata = mergeAiRuntimeMetadata(conversationMetadata, {
+      llmReplyDeferred: Boolean(reply.llmReplyDeferred),
+      deferReason: (reply.deferReason ?? null) as AiRuntimeDeferReason | null
+    });
     if (safeEvent.channel === 'web' && enteringHandoff && reply.handoffReady) {
-      const existingLifecycle = readWebChatLifecycle((conversationRow?.metadata ?? null) as Record<string, unknown> | null);
+      const existingLifecycle = readWebChatLifecycle(nextConversationMetadata);
       const lockedLifecycle = buildLockedLifecycle(new Date(), existingLifecycle);
-      await updateConversationMetadata({
+      const terminalReply = await generateHandoffTerminalReply({
+        locale,
+        history: syntheticHistory.slice(-12),
         conversationId: activeConversationId,
-        metadata: mergeWebChatLifecycleMetadata((conversationRow?.metadata ?? null) as Record<string, unknown> | null, lockedLifecycle)
+        cooldownHours: lockedLifecycle.cooldownHours
       });
-      reply = {
+      const terminalPatchedReply = {
         ...reply,
-        answer: getHandoffTerminalMessage(locale)
+        answer: terminalReply.answer,
+        fallbackModelUsed: terminalReply.fallbackModelUsed,
+        gracefulFailUsed: terminalReply.gracefulFailUsed,
+        rephraseUsed: terminalReply.rephraseUsed,
+        templateBlockTriggered: terminalReply.templateBlockTriggered,
+        repetitionScore: terminalReply.repetitionScore,
+        llmReplyDeferred: terminalReply.llmReplyDeferred,
+        deferReason: terminalReply.deferReason
       };
+      reply = terminalPatchedReply;
+      nextConversationMetadata = mergeAiRuntimeMetadata(
+        mergeWebChatLifecycleMetadata(nextConversationMetadata, lockedLifecycle),
+        {
+          llmReplyDeferred: Boolean(terminalPatchedReply.llmReplyDeferred),
+          deferReason: (terminalPatchedReply.deferReason ?? null) as AiRuntimeDeferReason | null
+        }
+      );
       chatLocked = true;
       chatMode = 'handoff_locked';
       cooldownUntil = lockedLifecycle.cooldownUntil ?? undefined;
       retryAfterSeconds = getRetryAfterSeconds(lockedLifecycle.cooldownUntil);
       remainingLowCostMessages = lockedLifecycle.windowLimit;
     }
+
+    await updateConversationMetadata({
+      conversationId: activeConversationId,
+      metadata: nextConversationMetadata
+    });
 
     await appendConversationMessage({
       conversationId: activeConversationId,
@@ -978,8 +1078,36 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         chatMode,
         cooldownUntil: cooldownUntil ?? null,
         retryAfterSeconds: retryAfterSeconds ?? null,
-        remainingLowCostMessages: remainingLowCostMessages ?? null
+        remainingLowCostMessages: remainingLowCostMessages ?? null,
+        fallbackModelUsed: reply.fallbackModelUsed ?? null,
+        gracefulFailUsed: reply.gracefulFailUsed ?? null,
+        rephraseUsed: reply.rephraseUsed ?? null,
+        templateBlockTriggered: reply.templateBlockTriggered ?? null,
+        repetitionScore: reply.repetitionScore ?? null,
+        topicGuard: reply.topicGuard ?? reply.topic,
+        llmReplyDeferred: reply.llmReplyDeferred ?? null,
+        deferReason: reply.deferReason ?? null,
+        llmCallsCount: reply.llmCallsCount ?? null,
+        jsonRepairUsed: reply.jsonRepairUsed ?? null,
+        sameModelFallbackSkipped: reply.sameModelFallbackSkipped ?? null,
+        parseFailReason: reply.parseFailReason ?? null,
+        extractLatencyMs,
+        replyLatencyMs,
+        turnLatencyMsTotal: Date.now() - turnStartedAt
       }
+    });
+    console.info('[orchestrator] turn telemetry', {
+      conversationId: activeConversationId,
+      channel: safeEvent.channel,
+      extractorUsed: briefExtraction.extractorUsed,
+      extractorDeterministicFallback: briefExtraction.deterministicFallback,
+      llm_calls_count_per_turn: reply.llmCallsCount ?? null,
+      json_repair_used: reply.jsonRepairUsed ?? null,
+      same_model_fallback_skipped: reply.sameModelFallbackSkipped ?? null,
+      parse_fail_reason: reply.parseFailReason ?? null,
+      extract_latency_ms: extractLatencyMs,
+      reply_latency_ms: replyLatencyMs,
+      turn_latency_ms_total: Date.now() - turnStartedAt
     });
     const finalMergedHistory = sessionMerged
       ? mapDialogHistory(await getConversationMessages(activeConversationId, 60))
@@ -1016,6 +1144,21 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         cooldownUntil: cooldownUntil ?? null,
         retryAfterSeconds: retryAfterSeconds ?? null,
         remainingLowCostMessages: remainingLowCostMessages ?? null,
+        fallbackModelUsed: reply.fallbackModelUsed ?? null,
+        gracefulFailUsed: reply.gracefulFailUsed ?? null,
+        rephraseUsed: reply.rephraseUsed ?? null,
+        templateBlockTriggered: reply.templateBlockTriggered ?? null,
+        repetitionScore: reply.repetitionScore ?? null,
+        topicGuard: reply.topicGuard ?? reply.topic,
+        llmReplyDeferred: reply.llmReplyDeferred ?? null,
+        deferReason: reply.deferReason ?? null,
+        llmCallsCount: reply.llmCallsCount ?? null,
+        jsonRepairUsed: reply.jsonRepairUsed ?? null,
+        sameModelFallbackSkipped: reply.sameModelFallbackSkipped ?? null,
+        parseFailReason: reply.parseFailReason ?? null,
+        extractLatencyMs,
+        replyLatencyMs,
+        turnLatencyMsTotal: Date.now() - turnStartedAt,
         sessionMerged,
         mergedFromConversationId: mergedFromConversationId ?? null,
         history: finalMergedHistory
