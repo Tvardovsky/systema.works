@@ -130,4 +130,39 @@ describe('dedupeLeadPipelineItems', () => {
     });
     expect(deduped).toHaveLength(2);
   });
+
+  it('keeps newest item payload when technical duplicates are collapsed', () => {
+    const items = [
+      {
+        ...makeItem({
+          id: 'newest-dialog',
+          customerId: 'cust-7',
+          createdAt: '2026-02-25T10:37:50.900Z',
+          updatedAt: '2026-02-25T11:37:51.000Z'
+        }),
+        dialog: {readiness: 'ready'}
+      },
+      {
+        ...makeItem({
+          id: 'older-dialog',
+          customerId: 'cust-7',
+          createdAt: '2026-02-25T10:00:50.900Z',
+          updatedAt: '2026-02-25T10:37:11.000Z',
+          unread: true
+        }),
+        dialog: {readiness: 'not_ready'}
+      }
+    ];
+
+    const deduped = dedupeLeadPipelineItems(items, {
+      browserKeyByConversationId: new Map([
+        ['newest-dialog', 'browser-key-7'],
+        ['older-dialog', 'browser-key-7']
+      ])
+    });
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.conversation.id).toBe('newest-dialog');
+    expect((deduped[0] as {dialog?: {readiness?: string}}).dialog?.readiness).toBe('ready');
+    expect(deduped[0]?.conversation.personalUnread).toBe(true);
+  });
 });

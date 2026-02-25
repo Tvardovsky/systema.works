@@ -12,7 +12,7 @@ export default defineConfig({
     trace: 'on-first-retry'
   },
   webServer: {
-    command: 'npm run dev -- --hostname 127.0.0.1 --port 3011',
+    command: 'ADMIN_DASH_TOKEN=e2e-admin CHAT_ENGINE_VERSION=v2 WEB_AUTO_MERGE_BY_IP_CONTACT=false npm run dev -- --hostname 127.0.0.1 --port 3011',
     url: 'http://127.0.0.1:3011/en',
     timeout: 120000,
     reuseExistingServer: !process.env.CI

@@ -27,7 +27,13 @@ import type {
   CustomerIdentityMatchResult,
   InboundEvent,
   LeadEventType,
-  LeadPriority
+  LeadPriority,
+  LeadPipelineDialogState,
+  LeadPipelineMissingSlotFilter,
+  LeadPipelineNextSlotFilter,
+  LeadPipelineReadinessFilter,
+  LeadReadFilter,
+  LeadSortMode
 } from '@/types/omnichannel';
 
 type MessageRole = 'user' | 'assistant' | 'manager' | 'system';
@@ -101,6 +107,8 @@ type LeadBriefRow = {
   budget_hint: string | null;
   referral_source: string | null;
   constraints: string | null;
+  brief_structured: Record<string, unknown> | null;
+  brief_structured_version: string | null;
   missing_fields: string[] | null;
   completeness_score: number | null;
   source_channel: Channel | null;
@@ -121,8 +129,6 @@ type LeadBriefRevisionRow = {
 };
 
 type IdentityClaimStatus = 'captured' | 'candidate_match' | 'verified' | 'rejected';
-type LeadReadFilter = 'all' | 'personal_unread' | 'personal_read';
-type LeadSortMode = 'unread_first' | 'updated_desc';
 
 const YES_PATTERN = /\b(yes|yeah|yep|sure|ok|confirm|да|угу|tak|si|oui)\b/i;
 const NO_PATTERN = /\b(no|nope|cancel|not now|нет|не|stop)\b/i;
@@ -260,6 +266,8 @@ function toLeadBrief(row: LeadBriefRow): LeadBrief {
     budgetHint: row.budget_hint,
     referralSource: row.referral_source ?? null,
     constraints: row.constraints,
+    briefStructured: (row.brief_structured ?? null) as Record<string, unknown> | null,
+    briefStructuredVersion: row.brief_structured_version ?? 'v2',
     missingFields: (row.missing_fields ?? []) as LeadBriefField[],
     completenessScore: row.completeness_score ?? 0,
     sourceChannel: row.source_channel,
@@ -1124,6 +1132,8 @@ export async function upsertLeadBrief(params: {
     budgetHint?: string | null;
     referralSource?: string | null;
     constraints?: string | null;
+    briefStructured?: Record<string, unknown> | null;
+    briefStructuredVersion?: string | null;
   };
 }): Promise<LeadBrief> {
   const supabase = getSupabaseAdminClient();
@@ -1149,6 +1159,8 @@ export async function upsertLeadBrief(params: {
   if (patch.budgetHint !== undefined) payload.budget_hint = clean(patch.budgetHint);
   if (patch.referralSource !== undefined) payload.referral_source = clean(patch.referralSource);
   if (patch.constraints !== undefined) payload.constraints = clean(patch.constraints);
+  if (patch.briefStructured !== undefined) payload.brief_structured = patch.briefStructured ?? {};
+  if (patch.briefStructuredVersion !== undefined) payload.brief_structured_version = clean(patch.briefStructuredVersion) ?? 'v2';
 
   let upsertPayload: Record<string, unknown> = payload;
   let {data, error} = await supabase
@@ -1161,6 +1173,26 @@ export async function upsertLeadBrief(params: {
     const withoutReferralSource = {...(upsertPayload as Record<string, unknown>)};
     delete withoutReferralSource.referral_source;
     upsertPayload = withoutReferralSource;
+    ({data, error} = await supabase
+      .from('lead_briefs')
+      .upsert(upsertPayload, {onConflict: 'conversation_id'})
+      .select('*')
+      .single());
+  }
+  if (error && 'brief_structured' in upsertPayload && isMissingColumnError(error.message, 'brief_structured')) {
+    const withoutStructured = {...(upsertPayload as Record<string, unknown>)};
+    delete withoutStructured.brief_structured;
+    upsertPayload = withoutStructured;
+    ({data, error} = await supabase
+      .from('lead_briefs')
+      .upsert(upsertPayload, {onConflict: 'conversation_id'})
+      .select('*')
+      .single());
+  }
+  if (error && 'brief_structured_version' in upsertPayload && isMissingColumnError(error.message, 'brief_structured_version')) {
+    const withoutStructuredVersion = {...(upsertPayload as Record<string, unknown>)};
+    delete withoutStructuredVersion.brief_structured_version;
+    upsertPayload = withoutStructuredVersion;
     ({data, error} = await supabase
       .from('lead_briefs')
       .upsert(upsertPayload, {onConflict: 'conversation_id'})
@@ -1187,6 +1219,8 @@ export async function upsertLeadBrief(params: {
         budgetHint: clean(params.patch?.budgetHint ?? null),
         referralSource: clean(params.patch?.referralSource ?? null),
         constraints: clean(params.patch?.constraints ?? null),
+        briefStructured: (params.patch?.briefStructured ?? null) as Record<string, unknown> | null,
+        briefStructuredVersion: clean(params.patch?.briefStructuredVersion) ?? 'v2',
         missingFields: params.missingFields,
         completenessScore: params.completenessScore,
         sourceChannel: params.sourceChannel ?? null,
@@ -1346,6 +1380,7 @@ function hasBriefContent(brief: LeadBrief | null): boolean {
     || brief.budgetHint
     || brief.referralSource
     || brief.constraints
+    || (brief.briefStructured && Object.keys(brief.briefStructured).length > 0)
   );
 }
 
@@ -1378,6 +1413,130 @@ function isTechnicalWebNoisePipelineItem(item: {
     return false;
   }
   return true;
+}
+
+function hasStructuredBriefData(brief: LeadBrief | null): boolean {
+  return Boolean(brief?.briefStructured && Object.keys(brief.briefStructured).length > 0);
+}
+
+function normalizePipelineMissingSlot(value: unknown): LeadPipelineMissingSlotFilter | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case 'service_type':
+    case 'serviceType':
+      return 'serviceType';
+    case 'primary_goal':
+    case 'primaryGoal':
+      return 'primaryGoal';
+    case 'timeline_or_budget':
+    case 'timelineOrBudget':
+      return 'timeline_or_budget';
+    case 'contact':
+      return 'contact';
+    default:
+      return null;
+  }
+}
+
+function normalizePipelineNextSlot(value: unknown): LeadPipelineNextSlotFilter | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case 'service_type':
+    case 'serviceType':
+      return 'serviceType';
+    case 'primary_goal':
+    case 'primaryGoal':
+      return 'primaryGoal';
+    case 'first_deliverable':
+    case 'firstDeliverable':
+      return 'firstDeliverable';
+    case 'timeline_or_budget':
+    case 'timeline':
+      return 'timeline';
+    case 'budget':
+      return 'budget';
+    case 'contact':
+      return 'contact';
+    case 'full_name':
+    case 'fullName':
+      return 'fullName';
+    case 'referral_source':
+    case 'referralSource':
+      return 'referralSource';
+    case 'handoff':
+      return 'handoff';
+    case 'scope':
+      return 'scope';
+    default:
+      return null;
+  }
+}
+
+function deriveLeadPipelineDialogState(brief: LeadBrief | null): LeadPipelineDialogState {
+  const fallback = computeLeadBriefState({
+    fullName: brief?.fullName ?? null,
+    email: brief?.email ?? null,
+    phone: brief?.phone ?? null,
+    telegramHandle: brief?.telegramHandle ?? null,
+    serviceType: brief?.serviceType ?? null,
+    primaryGoal: brief?.primaryGoal ?? null,
+    firstDeliverable: brief?.firstDeliverable ?? null,
+    timelineHint: brief?.timelineHint ?? null,
+    budgetHint: brief?.budgetHint ?? null,
+    referralSource: brief?.referralSource ?? null,
+    constraints: brief?.constraints ?? null
+  });
+  const hasStructuredBrief = hasStructuredBriefData(brief);
+
+  let missingCoreSlots = fallback.missingCoreSlots;
+  let nextSlot: LeadPipelineNextSlotFilter | null = fallback.nextSlot;
+  let engineVersion: string | null = null;
+
+  if (hasStructuredBrief) {
+    const structured = (brief?.briefStructured ?? null) as Record<string, unknown> | null;
+    if (structured && Array.isArray(structured.missingBlocking)) {
+      const mappedMissing = structured.missingBlocking
+        .map((slot) => normalizePipelineMissingSlot(slot))
+        .filter((slot): slot is LeadPipelineMissingSlotFilter => Boolean(slot));
+      if (mappedMissing.length || structured.missingBlocking.length === 0) {
+        missingCoreSlots = mappedMissing;
+      }
+    }
+    const structuredNextSlot = normalizePipelineNextSlot(structured?.nextSlot);
+    if (structuredNextSlot) {
+      nextSlot = structuredNextSlot;
+    }
+    engineVersion = clean(
+      (typeof structured?.engineVersion === 'string' ? structured.engineVersion : null)
+      ?? brief?.briefStructuredVersion
+      ?? 'v2'
+    );
+  }
+
+  const readiness: LeadPipelineReadinessFilter = missingCoreSlots.length === 0 ? 'ready' : 'not_ready';
+  if (!nextSlot) {
+    nextSlot = readiness === 'ready' ? 'handoff' : null;
+  }
+
+  return {
+    engineVersion,
+    readiness,
+    missingCoreSlots,
+    nextSlot,
+    hasStructuredBrief
+  };
 }
 
 function isUnknownCustomerName(value?: string | null): boolean {
@@ -1549,6 +1708,9 @@ export async function listLeadPipeline(params: {
   viewerUserId?: string | null;
   readFilter?: LeadReadFilter;
   sort?: LeadSortMode;
+  readiness?: LeadPipelineReadinessFilter;
+  missingSlot?: LeadPipelineMissingSlotFilter;
+  nextSlot?: LeadPipelineNextSlotFilter;
 }) {
   const supabase = getSupabaseAdminClient();
   let convQuery = supabase
@@ -1650,6 +1812,7 @@ export async function listLeadPipeline(params: {
     const customerId = String(conversation.customer_id);
     const customer = customerById.get(customerId);
     const briefRow = briefByConversation.get(String(conversation.id));
+    const brief = briefRow ? toLeadBrief(briefRow) : null;
     const latestEvent = latestEventByConversation.get(String(conversation.id));
     const conversationId = String(conversation.id);
     const inboundAt = conversation.last_inbound_message_at ? String(conversation.last_inbound_message_at) : null;
@@ -1686,7 +1849,7 @@ export async function listLeadPipeline(params: {
         emails: (customer?.emails as string[] | undefined) ?? [],
         phones: (customer?.phones as string[] | undefined) ?? []
       },
-      brief: briefRow ? toLeadBrief(briefRow) : null,
+      brief,
       latestEvent: latestEvent
         ? {
             id: String(latestEvent.id),
@@ -1696,7 +1859,8 @@ export async function listLeadPipeline(params: {
             createdAt: String(latestEvent.created_at)
           }
         : null,
-      verificationLevel: highestVerificationLevel(identityLevelsByCustomer.get(customerId) ?? [])
+      verificationLevel: highestVerificationLevel(identityLevelsByCustomer.get(customerId) ?? []),
+      dialog: deriveLeadPipelineDialogState(brief)
     };
   });
 
@@ -1729,6 +1893,18 @@ export async function listLeadPipeline(params: {
     items = items.filter((item) => item.conversation.personalUnread);
   } else if (readFilter === 'personal_read') {
     items = items.filter((item) => !item.conversation.personalUnread);
+  }
+
+  if (params.readiness) {
+    items = items.filter((item) => item.dialog.readiness === params.readiness);
+  }
+  const missingSlotFilter = params.missingSlot;
+  if (missingSlotFilter) {
+    items = items.filter((item) => item.dialog.missingCoreSlots.includes(missingSlotFilter));
+  }
+  const nextSlotFilter = params.nextSlot;
+  if (nextSlotFilter) {
+    items = items.filter((item) => item.dialog.nextSlot === nextSlotFilter);
   }
 
   const sort = params.sort ?? 'unread_first';

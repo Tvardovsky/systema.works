@@ -126,6 +126,7 @@
     "typing": "Pišem...",
     "placeholder": "Opišite zadatak",
     "send": "Pošalji",
+    "sessionLoading": "Povezujemo chat...",
     "startError": "Ne možemo pokrenuti sesiju sada. Pokušajte ponovo.",
     "replyError": "Nisam uspio obraditi poruku. Pokušajte opet.",
     "cooldownLabel": "Sledeća poruka biće dostupna za {time}.",
@@ -134,6 +135,13 @@
   "Admin": {
     "fields": {
       "referralSource": "Izvor upita"
+    },
+    "filters": {
+      "readinessAll": "Bilo koja spremnost",
+      "readinessReady": "Spremno za handoff",
+      "readinessNotReady": "Nije spremno",
+      "missingSlotAll": "Bilo koji nedostajući slot",
+      "nextSlotAll": "Bilo koji sledeći slot"
     },
     "sections": {
       "technicalSignals": "Tehnički signali klijenta"
@@ -151,7 +159,25 @@
       "recentIps": "Nedavni IP",
       "recentCountries": "Nedavne države",
       "recentAgents": "Nedavni user-agent",
-      "hits": "Hitovi"
+      "hits": "Hitovi",
+      "readiness": "Spremnost",
+      "nextSlot": "Sledeći slot",
+      "engineVersion": "Verzija engine-a",
+      "legacyMode": "Legacy mode",
+      "timelineOrBudget": "Rok ili budžet",
+      "scope": "Scope pojašnjenje",
+      "handoff": "Handoff",
+      "mode": "Režim",
+      "safety": "Safety",
+      "chatMode": "Režim chata",
+      "turnMode": "Režim poteza",
+      "questionsCount": "Pitanja u potezu",
+      "fallbackPath": "Fallback putanja",
+      "validatorAdjusted": "Validator adjusted"
+    },
+    "badges": {
+      "ready": "READY",
+      "notReady": "NOT READY"
     }
   }
 }

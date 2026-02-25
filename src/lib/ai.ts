@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import {zodResponseFormat} from 'openai/helpers/zod';
 import type {BriefContext, ChatMessage, ChatResponse, Locale, ServiceFamily} from '@/types/lead';
+import {runDialogV2Turn} from '@/lib/dialog-v2/engine';
 import {aiReplySchema} from './schemas';
 import {
   extractLeadSignals,
@@ -1302,7 +1303,7 @@ function getConversationMeta(params: {
     const missingFields = brief.missingFields.includes('contact')
       ? brief.missingFields
       : (['contact', ...brief.missingFields] as typeof brief.missingFields);
-    const completenessScore = Math.max(0, Math.min(100, Math.round(((5 - missingFields.length) / 5) * 100)));
+    const completenessScore = Math.max(0, Math.min(100, Math.round(((4 - missingFields.length) / 4) * 100)));
     brief = {
       ...brief,
       missingFields,
@@ -2321,6 +2322,30 @@ export async function generateAgencyReply(params: {
   const replyLocale = detectReplyLanguage(message, history, locale);
   const identityState = params.identityState ?? 'unverified';
   const memoryLoaded = params.memoryLoaded ?? false;
+  const configuredDialogMode = process.env.CHAT_DIALOG_MODE?.toLowerCase();
+  const runtimeMode = configuredDialogMode === 'v2_deterministic'
+    ? 'v2_deterministic'
+    : 'v3_llm_first';
+  const useLegacyV1 = (!configuredDialogMode && process.env.CHAT_ENGINE_VERSION?.toLowerCase() === 'v1');
+  if (!useLegacyV1) {
+    const dialogDecision = await runDialogV2Turn({
+      locale: replyLocale,
+      channel: params.channel,
+      message,
+      history: history.slice(-14),
+      briefContext: params.briefContext,
+      identityState,
+      runtimeMode,
+      conversationId: params.conversationId
+    });
+    return {
+      ...dialogDecision.response,
+      identityState,
+      memoryLoaded,
+      verificationHint: params.verificationHint
+    };
+  }
+
   const meta = getConversationMeta({
     locale: replyLocale,
     message,

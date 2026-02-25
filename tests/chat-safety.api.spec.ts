@@ -100,4 +100,69 @@ test.describe('chat safety api', () => {
     expect(lockedStart.chatMode).toBe('safety_locked');
     expect(Number(lockedStart.retryAfterSeconds ?? 0)).toBeGreaterThan(0);
   });
+
+  test('warning on invalid name preserves other captured brief fields for the next turn', async ({request}) => {
+    const browserSessionKey = randomUUID();
+
+    const startResponse = await request.post('/api/chat/session/start', {
+      data: {
+        locale: 'en',
+        pagePath: '/en',
+        turnstileToken: '',
+        browserSessionKey,
+        honeypot: ''
+      }
+    });
+    expect(startResponse.ok()).toBe(true);
+    const startData = await startResponse.json() as {allowed: boolean; sessionId?: string};
+    expect(startData.allowed).toBe(true);
+    const sessionId = String(startData.sessionId);
+
+    const first = await request.post('/api/chat/message', {
+      data: {
+        sessionId,
+        locale: 'en',
+        message: [
+          'My name is Oleg 012832.',
+          'Email: client-01283224fd30@example.com.',
+          'Need a landing page for lead generation.',
+          'Primary goal is to increase qualified inbound leads.',
+          'Timeline is 2 weeks, budget is 3000 EUR.'
+        ].join(' '),
+        turnstileToken: '',
+        honeypot: ''
+      }
+    });
+    expect(first.ok()).toBe(true);
+    const firstData = await first.json() as {
+      answer: string;
+      chatLocked?: boolean;
+      chatMode?: string;
+      missingFields?: string[];
+      handoffReady?: boolean;
+    };
+    expect(firstData.chatLocked).toBe(false);
+    expect(firstData.chatMode).toBe('normal');
+    expect(firstData.answer.toLowerCase()).toContain('name looks invalid');
+    expect(firstData.missingFields ?? []).not.toContain('primary_goal');
+    expect(firstData.missingFields ?? []).not.toContain('service_type');
+    expect(firstData.missingFields ?? []).not.toContain('timeline_or_budget');
+    expect(firstData.missingFields ?? []).not.toContain('contact');
+    expect(firstData.handoffReady).toBe(true);
+
+    const second = await request.post('/api/chat/message', {
+      data: {
+        sessionId,
+        locale: 'en',
+        message: 'Found you on Google search.',
+        turnstileToken: '',
+        honeypot: ''
+      }
+    });
+    expect(second.ok()).toBe(true);
+    const secondData = await second.json() as {answer?: string; nextQuestion?: string};
+    const combined = `${secondData.answer ?? ''} ${secondData.nextQuestion ?? ''}`.toLowerCase();
+    expect(combined).not.toContain('business outcome');
+    expect(combined).not.toContain('primary goal');
+  });
 });

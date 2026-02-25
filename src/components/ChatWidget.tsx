@@ -181,6 +181,7 @@ export function ChatWidget() {
   const [remainingLowCostMessages, setRemainingLowCostMessages] = useState(0);
   const [startingSession, setStartingSession] = useState(false);
   const attemptedRestoreRef = useRef(false);
+  const autoStartAttemptedRef = useRef(false);
   const sessionStartInFlightRef = useRef(false);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -215,7 +216,7 @@ export function ChatWidget() {
     chatEndRef.current?.scrollIntoView({block: 'end', behavior});
   }, []);
 
-  const startSession = useCallback(async (options?: {existingSessionId?: string; silent?: boolean}) => {
+  const startSession = useCallback(async (options?: {existingSessionId?: string; silent?: boolean; turnstileTokenOverride?: string}) => {
     if (sessionStartInFlightRef.current) {
       return;
     }
@@ -238,7 +239,7 @@ export function ChatWidget() {
       body: JSON.stringify({
         locale,
         pagePath: window.location.pathname,
-        turnstileToken,
+        turnstileToken: options?.turnstileTokenOverride ?? turnstileToken,
         existingSessionId,
         browserSessionKey: getOrCreateBrowserSessionKey(),
         clientHints: clientHintsRef.current ?? (clientHintsRef.current = collectClientHints()),
@@ -293,8 +294,29 @@ export function ChatWidget() {
     }
   }, [createMessage, locale, sessionId, t, turnstileToken]);
 
+  const tryAutoStartAfterVerification = useCallback((turnstileTokenOverride?: string) => {
+    const verified = turnstileVerified || Boolean(turnstileTokenOverride);
+    if (!open || !turnstileEnabled || !verified || sessionId || sessionStartInFlightRef.current || autoStartAttemptedRef.current) {
+      return;
+    }
+
+    autoStartAttemptedRef.current = true;
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const existingSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY) ?? undefined;
+    void startSession({
+      existingSessionId,
+      silent: Boolean(existingSessionId),
+      turnstileTokenOverride
+    });
+  }, [open, sessionId, startSession, turnstileEnabled, turnstileVerified]);
+
   const restoreSessionIfExists = useCallback(() => {
     if (sessionId || attemptedRestoreRef.current || typeof window === 'undefined') {
+      return;
+    }
+    if (turnstileEnabled && !turnstileVerified) {
       return;
     }
 
@@ -305,7 +327,7 @@ export function ChatWidget() {
     }
 
     void startSession({existingSessionId, silent: true});
-  }, [sessionId, startSession]);
+  }, [sessionId, startSession, turnstileEnabled, turnstileVerified]);
 
   const unlockBackgroundScroll = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -328,6 +350,17 @@ export function ChatWidget() {
     scrollLockSnapshotRef.current = null;
     window.scrollTo(0, snapshot.scrollY);
   }, []);
+
+  useEffect(() => {
+    if (!open) {
+      autoStartAttemptedRef.current = false;
+      return;
+    }
+    if (sessionId) {
+      return;
+    }
+    tryAutoStartAfterVerification();
+  }, [open, sessionId, tryAutoStartAfterVerification]);
 
   useEffect(() => {
     const openFromEvent = () => {
@@ -602,21 +635,31 @@ export function ChatWidget() {
                 onSuccess={(token) => {
                   setTurnstileToken(token);
                   setTurnstileVerified(true);
+                  tryAutoStartAfterVerification(token);
                 }}
                 onExpire={() => {
                   if (!canStart) {
                     setTurnstileToken('');
                     setTurnstileVerified(false);
+                    autoStartAttemptedRef.current = false;
                   }
                 }}
                 onError={() => {
                   if (!canStart) {
                     setTurnstileToken('');
                     setTurnstileVerified(false);
+                    autoStartAttemptedRef.current = false;
                   }
                 }}
                 options={{theme: 'light'}}
               />
+            </div>
+          ) : null}
+
+          {startingSession && !canStart ? (
+            <div className="chat-loading-state" role="status" aria-live="polite">
+              <span className="chat-loading-spinner" aria-hidden="true" />
+              <span>{t('sessionLoading')}</span>
             </div>
           ) : null}
 
@@ -656,7 +699,7 @@ export function ChatWidget() {
             </p>
           ) : null}
 
-          {!canStart && !chatLocked ? (
+          {!canStart && !chatLocked && !(turnstileEnabled && turnstileVerified && startingSession) ? (
             <div className="chat-start-action">
               <button
                 className="chat-start-button"

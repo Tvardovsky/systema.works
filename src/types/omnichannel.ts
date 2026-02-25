@@ -1,4 +1,4 @@
-import type {Locale} from '@/types/lead';
+import type {DialogMissingCoreSlot, DialogReadiness, DialogSlotKey, Locale} from '@/types/lead';
 
 export type Channel = 'web' | 'telegram' | 'instagram' | 'facebook' | 'whatsapp';
 
@@ -9,6 +9,17 @@ export type LeadEventType = 'qualified' | 'hot' | 'handoff' | 'won' | 'lost';
 export type LeadPriority = 'low' | 'medium' | 'high';
 export type LeadReadFilter = 'all' | 'personal_unread' | 'personal_read';
 export type LeadSortMode = 'unread_first' | 'updated_desc';
+export type LeadPipelineReadinessFilter = DialogReadiness;
+export type LeadPipelineMissingSlotFilter = DialogMissingCoreSlot;
+export type LeadPipelineNextSlotFilter = DialogSlotKey;
+
+export type LeadPipelineDialogState = {
+  engineVersion: string | null;
+  readiness: DialogReadiness;
+  missingCoreSlots: DialogMissingCoreSlot[];
+  nextSlot: DialogSlotKey | null;
+  hasStructuredBrief: boolean;
+};
 
 export type LeadBriefStatus = 'collecting' | 'ready_for_handoff' | 'handoff';
 
@@ -36,6 +47,8 @@ export type LeadBrief = {
   budgetHint: string | null;
   referralSource: string | null;
   constraints: string | null;
+  briefStructured: Record<string, unknown> | null;
+  briefStructuredVersion: string;
   missingFields: LeadBriefField[];
   completenessScore: number;
   sourceChannel: Channel | null;

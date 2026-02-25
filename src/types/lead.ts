@@ -18,6 +18,22 @@ export type ChatMessage = {
   content: string;
 };
 
+export type DialogSlotKey =
+  | 'serviceType'
+  | 'primaryGoal'
+  | 'firstDeliverable'
+  | 'timeline'
+  | 'budget'
+  | 'contact'
+  | 'fullName'
+  | 'referralSource'
+  | 'handoff'
+  | 'scope';
+
+export type DialogReadiness = 'ready' | 'not_ready';
+
+export type DialogMissingCoreSlot = 'serviceType' | 'primaryGoal' | 'timeline_or_budget' | 'contact';
+
 export type BriefContext = {
   fullName?: string | null;
   email?: string | null;
@@ -30,6 +46,8 @@ export type BriefContext = {
   budgetHint?: string | null;
   referralSource?: string | null;
   constraints?: string | null;
+  briefStructured?: Record<string, unknown> | null;
+  briefStructuredVersion?: string | null;
   missingFields?: string[];
   completenessScore?: number;
   hasConversationContact?: boolean;
@@ -62,4 +80,8 @@ export type ChatResponse = {
   sameModelFallbackSkipped?: boolean;
   parseFailReason?: 'length_limit' | 'invalid_json' | 'timeout' | null;
   replyLatencyMs?: number | null;
+  dialogTurnMode?: 'progress' | 'answer_only' | 'scope_clarify';
+  questionsCount?: number;
+  fallbackPath?: 'primary' | 'retry' | 'deterministic';
+  validatorAdjusted?: boolean;
 };

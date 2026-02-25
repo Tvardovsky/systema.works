@@ -641,6 +641,26 @@ a:not(.btn) {
   max-width: min(78%, 35rem);
 }
 
+.admin-chat-meta {
+  max-width: min(78%, 35rem);
+  font-size: 11px;
+  line-height: 1.25;
+  opacity: 0.72;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  display: block;
+}
+
+.admin-chat .chat-start .admin-chat-meta {
+  justify-self: start;
+  text-align: left;
+}
+
+.admin-chat .chat-end .admin-chat-meta {
+  justify-self: end;
+  text-align: right;
+}
+
 @media (max-width: 1200px) {
   .admin-v2-filters {
     grid-template-columns: minmax(220px, 1fr) minmax(0, 1.3fr);
@@ -841,6 +861,29 @@ a:not(.btn) {
   pointer-events: auto !important;
 }
 
+.chat-loading-state {
+  margin: 0.55rem 0 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.72rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.84);
+  color: rgba(18, 40, 74, 0.82);
+  padding: 0.5rem 0.66rem;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.chat-loading-spinner {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+  border: 2px solid rgba(29, 60, 111, 0.18);
+  border-top-color: rgba(29, 60, 111, 0.88);
+  animation: chat-loading-spin 700ms linear infinite;
+}
+
 .chat-composer {
   display: grid;
   margin-top: auto;
@@ -988,6 +1031,15 @@ a:not(.btn) {
   40% {
     opacity: 0.88;
     transform: translateY(-2px);
+  }
+}
+
+@keyframes chat-loading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

@@ -40,6 +40,28 @@ export const aiReplySchema = z.object({
   verificationHint: z.string().optional()
 });
 
+export const adminLeadsPipelineQuerySchema = z.object({
+  status: z.enum(['open', 'qualified', 'hot', 'handoff', 'closed']).optional(),
+  assignee: z.string().trim().max(120).optional(),
+  q: z.string().trim().max(200).optional(),
+  readFilter: z.enum(['all', 'personal_unread', 'personal_read']).optional(),
+  sort: z.enum(['updated_desc', 'unread_first']).optional(),
+  readiness: z.enum(['ready', 'not_ready']).optional(),
+  missingSlot: z.enum(['serviceType', 'primaryGoal', 'timeline_or_budget', 'contact']).optional(),
+  nextSlot: z.enum([
+    'serviceType',
+    'primaryGoal',
+    'firstDeliverable',
+    'timeline',
+    'budget',
+    'contact',
+    'fullName',
+    'referralSource',
+    'handoff',
+    'scope'
+  ]).optional()
+});
+
 export const adminBriefPatchSchema = z.object({
   fullName: z.string().max(120).optional(),
   email: z.string().email().max(160).optional(),

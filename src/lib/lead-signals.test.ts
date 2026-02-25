@@ -149,6 +149,27 @@ describe('extractLeadSignals', () => {
     expect(result.budgetNormalized).toBe('EUR 50000');
   });
 
+  it('does not treat timeline duration range as budget', () => {
+    const result = extractLeadSignals({
+      history: [],
+      message: 'Сроки запуска 3-4 месяца'
+    });
+
+    expect(result.timelineHint).toBeTruthy();
+    expect(result.budgetHint).toBeNull();
+    expect(result.budgetNormalized).toBeNull();
+  });
+
+  it('parses million shorthand only with explicit budget marker', () => {
+    const result = extractLeadSignals({
+      history: [],
+      message: 'Бюджет 3-4 м'
+    });
+
+    expect(result.budgetHint).toBe('3-4 м');
+    expect(result.budgetNormalized).toBe('UNKNOWN 3000000-4000000');
+  });
+
   it('parses no-deadline and asap timeline in multiple languages', () => {
     const ruNoDeadline = extractLeadSignals({
       history: [],

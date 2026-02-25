@@ -86,6 +86,7 @@ const TIMELINE_HINTS = [
 
 const NO_DEADLINE_HINTS = [
   'сроки не важ', 'срок не важ', 'сроки не крит', 'дедлайн не важ', 'без дедлайн', 'не срочно',
+  'сроков пока нет', 'сроков нет', 'нет сроков', 'без сроков', 'пока без сроков', 'пока дедлайна нет',
   'термін не важ', 'строки не важ', 'без дедлайну', 'не терміново',
   'timeline is flexible', 'no deadline', 'not important', 'not critical', 'no rush', 'flexible timeline',
   'rok nije bitan', 'rok nije važan', 'nije hitno', 'fleksibilan rok'
@@ -98,7 +99,8 @@ const ASAP_HINTS = [
 
 const UP_TO_BUDGET_HINTS = ['up to', 'under', 'max', 'maximum', 'less than', 'до', 'не более', 'максимум', 'najviše'];
 const APPROX_BUDGET_HINTS = ['about', 'around', 'approx', '~', 'примерно', 'около', 'где-то', 'орієнтовно', 'otprilike', 'oko'];
-const BUDGET_NUMBER_HINTS = ['k', 'к', 'm', 'м', 'тыс', 'thousand', 'млн', 'million'];
+const BUDGET_NUMBER_TOKEN_RE = /\d[\d\s.,]*\s*(?:k|к|m|м|тыс|thousand|млн|million)(?![a-zа-яёіїє])/i;
+const TIMELINE_DURATION_RE = /(\d{1,3}(?:\s*[-–—]\s*\d{1,3})?\s*(?:day|days|week|weeks|month|months|year|years|дн(?:я|ей|и)?|день|недел[ьяию]|недел[яи]|месяц(?:а|ев)?|мес(?:\.|яц(?:а|ев)?)?|год(?:а|ов)?|тиж(?:день|ні|нів)?|місяц(?:і|ів)?|міс(?:\.|яц(?:і|ів)?)?|рік|роки|god(?:ine)?|nedelj[aeu]?|sedmic[aeu]?|mjesec(?:a|i)?|mesec(?:a|i)?))/i;
 const AREA_HINTS = [
   'м²', 'м2', 'кв.м', 'кв м', 'квадрат', 'площад', 'участок', 'сотк', 'га',
   'sqm', 'sq m', 'square meter', 'square meters', 'area', 'plot', 'parcel', 'lot size',
@@ -156,6 +158,11 @@ const NO_DEADLINE_PATTERNS: RegExp[] = [
   /\bnot\s+critical\b/i,
   /\bflexible\b/i,
   /без\s+дедлайн/i,
+  /срок[а-яёіїє]*\s*(?:пока\s*)?нет/i,
+  /нет\s+срок[а-яёіїє]*/i,
+  /без\s+срок[а-яёіїє]*/i,
+  /пока\s+без\s+срок[а-яёіїє]*/i,
+  /пока\s+дедлайн[а-яёіїє]*\s+нет/i,
   /не\s+сроч/i,
   /срок[а-яёіїє]*\s*(?:пока\s*)?не\s*(?:важ|крит)/i,
   /срок[а-яёіїє]*\s*(?:не\s*)?важн/i,
@@ -441,14 +448,14 @@ function parseAmountToken(input: string): number | null {
   }
 
   let multiplier = 1;
-  if (/(k|к|тыс|thousand)\b/i.test(raw)) {
+  if (/(k|к|тыс|thousand)(?![a-zа-яёіїє])/i.test(raw)) {
     multiplier = 1000;
-  } else if (/(m|м|млн|million)\b/i.test(raw)) {
+  } else if (/(m|м|млн|million)(?![a-zа-яёіїє])/i.test(raw)) {
     multiplier = 1000000;
   }
 
   let numeric = raw
-    .replace(/(k|к|тыс|thousand|m|м|млн|million)\b/gi, '')
+    .replace(/(k|к|тыс|thousand|m|м|млн|million)(?![a-zа-яёіїє])/gi, '')
     .replace(/[^\d.,]/g, '')
     .trim();
   if (!numeric) {
@@ -476,7 +483,7 @@ function hasBudgetIndicators(params: {lower: string; currency: string | null}): 
   if (includesAny(params.lower, BUDGET_HINTS) || includesAny(params.lower, UP_TO_BUDGET_HINTS) || includesAny(params.lower, APPROX_BUDGET_HINTS)) {
     return true;
   }
-  return BUDGET_NUMBER_HINTS.some((hint) => params.lower.includes(hint));
+  return BUDGET_NUMBER_TOKEN_RE.test(params.lower);
 }
 
 export function hasAreaSignal(text: string): boolean {
@@ -532,18 +539,22 @@ function parseBudgetHint(text: string): BudgetParse | null {
   const currency = detectCurrencyCode(cleaned);
   const hasArea = hasAreaSignal(cleaned);
   const hasExplicitBudget = hasExplicitBudgetSignal(cleaned);
+  const hasTimelineDuration = TIMELINE_DURATION_RE.test(cleaned);
   const hasIndicators = hasBudgetIndicators({lower, currency}) && (!hasArea || hasExplicitBudget);
 
   if (hasArea && !hasExplicitBudget) {
     return null;
   }
+  if (hasTimelineDuration && !hasExplicitBudget && !currency) {
+    return null;
+  }
 
-  const rangeMatch = cleaned.match(/([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)\s*[-–—]\s*([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)/i);
+  const rangeMatch = cleaned.match(/([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million)(?![a-zа-яёіїє]))?)\s*[-–—]\s*([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million)(?![a-zа-яёіїє]))?)/i);
   if (rangeMatch) {
     const leftToken = (rangeMatch[1] ?? '').trim();
     const rightToken = (rangeMatch[2] ?? '').trim();
-    const rightUnit = rightToken.match(/(k|к|m|м|тыс|thousand|млн|million)$/i)?.[1] ?? null;
-    const normalizedLeftToken = rightUnit && !/\b(k|к|m|м|тыс|thousand|млн|million)\b/i.test(leftToken)
+    const rightUnit = rightToken.match(/(k|к|m|м|тыс|thousand|млн|million)(?![a-zа-яёіїє])$/i)?.[1] ?? null;
+    const normalizedLeftToken = rightUnit && !/(k|к|m|м|тыс|thousand|млн|million)(?![a-zа-яёіїє])/i.test(leftToken)
       ? `${leftToken}${rightUnit}`
       : leftToken;
     const first = parseAmountToken(normalizedLeftToken);
@@ -562,13 +573,13 @@ function parseBudgetHint(text: string): BudgetParse | null {
     return null;
   }
   const budgetFocusedToken = hasExplicitBudget ? findBudgetFocusedToken(cleaned) : null;
-  const singleMatch = cleaned.match(/([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million))?)/i);
+  const singleMatch = cleaned.match(/([~≈]?\s*\d[\d\s.,]*(?:\s?(?:k|к|m|м|тыс|thousand|млн|million)(?![a-zа-яёіїє]))?)/i);
   if (!singleMatch) {
     return null;
   }
   const token = budgetFocusedToken ?? singleMatch[1] ?? '';
   const justDigits = token.replace(/[^\d]/g, '');
-  if (!currency && !includesAny(lower, BUDGET_HINTS) && !/(k|к|m|м|тыс|thousand|млн|million)\b/i.test(token) && justDigits.length >= 8) {
+  if (!currency && !includesAny(lower, BUDGET_HINTS) && !/(k|к|m|м|тыс|thousand|млн|million)(?![a-zа-яёіїє])/i.test(token) && justDigits.length >= 8) {
     return null;
   }
   const amount = parseAmountToken(token);
@@ -672,7 +683,7 @@ function formatBudgetHint(parsed: BudgetParse | null): string | null {
   if (!parsed) {
     return null;
   }
-  return `raw: ${parsed.raw}; normalized: ${parsed.normalized}`;
+  return parsed.raw;
 }
 
 function inferPrimaryGoal(message: string, hasScope: boolean): string | null {

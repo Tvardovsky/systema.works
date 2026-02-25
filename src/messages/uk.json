@@ -126,6 +126,7 @@
     "typing": "Друкую...",
     "placeholder": "Опишіть вашу задачу",
     "send": "Надіслати",
+    "sessionLoading": "Підключаємо чат...",
     "startError": "Не вдалося запустити сесію. Спробуйте ще раз.",
     "replyError": "Не вдалося обробити повідомлення. Спробуйте ще раз.",
     "cooldownLabel": "Наступне повідомлення буде доступне через {time}.",
@@ -134,6 +135,13 @@
   "Admin": {
     "fields": {
       "referralSource": "Джерело звернення"
+    },
+    "filters": {
+      "readinessAll": "Будь-яка готовність",
+      "readinessReady": "Готово до handoff",
+      "readinessNotReady": "Не готово",
+      "missingSlotAll": "Будь-який пропущений слот",
+      "nextSlotAll": "Будь-який наступний слот"
     },
     "sections": {
       "technicalSignals": "Технічні сигнали клієнта"
@@ -151,7 +159,25 @@
       "recentIps": "Недавні IP",
       "recentCountries": "Недавні країни",
       "recentAgents": "Недавні user-agent",
-      "hits": "Хіти"
+      "hits": "Хіти",
+      "readiness": "Готовність",
+      "nextSlot": "Наступний слот",
+      "engineVersion": "Версія рушія",
+      "legacyMode": "Legacy mode",
+      "timelineOrBudget": "Терміни або бюджет",
+      "scope": "Уточнення scope",
+      "handoff": "Handoff",
+      "mode": "Режим",
+      "safety": "Safety",
+      "chatMode": "Режим чату",
+      "turnMode": "Режим ходу",
+      "questionsCount": "Питань у ході",
+      "fallbackPath": "Шлях fallback",
+      "validatorAdjusted": "Validator adjusted"
+    },
+    "badges": {
+      "ready": "READY",
+      "notReady": "NOT READY"
     }
   }
 }

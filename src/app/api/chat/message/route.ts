@@ -1,7 +1,7 @@
 import {NextRequest, NextResponse} from 'next/server';
 import {randomUUID} from 'crypto';
 import {chatMessageSchema} from '@/lib/schemas';
-import type {ChatMessage} from '@/types/lead';
+import type {ChatMessage, ChatResponse} from '@/types/lead';
 import {
   appendConversationMessage,
   appendLeadBriefRevision,
@@ -46,6 +46,17 @@ import {
 } from '@/lib/web-chat-lifecycle';
 
 type AiRuntimeDeferReason = 'quota' | 'rate_limit' | 'connection' | 'parse_error';
+
+function getConfiguredDialogEngineVersion(): 'v1' | 'v2' | 'v3' {
+  const mode = process.env.CHAT_DIALOG_MODE?.toLowerCase();
+  if (mode === 'v2_deterministic') {
+    return 'v2';
+  }
+  if (mode === 'v3_llm_first') {
+    return 'v3';
+  }
+  return process.env.CHAT_ENGINE_VERSION?.toLowerCase() === 'v1' ? 'v1' : 'v3';
+}
 
 function cleanText(input?: string | null): string | null {
   if (!input) {
@@ -114,6 +125,10 @@ function buildSafetyResponsePayload(params: {
   retryAfterSeconds?: number;
   remainingLowCostMessages?: number;
   sessionClosed?: boolean;
+  conversationStage?: ChatResponse['conversationStage'];
+  missingFields?: string[];
+  handoffReady?: boolean;
+  dialogMode?: ChatResponse['dialogMode'];
 }) {
   return {
     sessionId: params.conversation.id,
@@ -122,13 +137,13 @@ function buildSafetyResponsePayload(params: {
     leadIntentScore: Number(params.conversation.lead_intent_score ?? 80),
     nextQuestion: '',
     requiresLeadCapture: false,
-    conversationStage: 'handoff_ready' as const,
-    missingFields: [],
-    handoffReady: true,
+    conversationStage: params.conversationStage ?? ('handoff_ready' as const),
+    missingFields: params.missingFields ?? [],
+    handoffReady: params.handoffReady ?? true,
     identityState: String(params.conversation.identity_state ?? 'unverified'),
     memoryAccess: String(params.conversation.memory_access ?? 'session_only'),
     memoryLoaded: false,
-    dialogMode: 'context_continuation' as const,
+    dialogMode: params.dialogMode ?? ('context_continuation' as const),
     chatLocked: params.chatLocked,
     chatMode: params.chatMode,
     cooldownUntil: params.cooldownUntil ?? undefined,
@@ -136,6 +151,159 @@ function buildSafetyResponsePayload(params: {
     remainingLowCostMessages: params.remainingLowCostMessages ?? undefined,
     safetyReason: params.reason,
     sessionClosed: params.sessionClosed ?? false
+  };
+}
+
+function sanitizeSafetyCapturedSignals(
+  reason: SafetyViolationKind,
+  fields: Awaited<ReturnType<typeof extractBriefSignals>>['fields']
+) {
+  return {
+    ...fields,
+    fullName: reason === 'invalid_name' ? null : fields.fullName,
+    email: reason === 'invalid_email' ? null : fields.email,
+    phone: reason === 'invalid_phone' ? null : fields.phone
+  };
+}
+
+async function persistSafetyWarningContext(params: {
+  conversation: NonNullable<Awaited<ReturnType<typeof getConversationById>>>;
+  locale: 'en' | 'sr-ME' | 'ru' | 'uk';
+  message: string;
+  reason: SafetyViolationKind;
+}) {
+  const [historyRows, existingBrief] = await Promise.all([
+    getConversationMessages(params.conversation.id, 30),
+    getLeadBriefByConversation(params.conversation.id)
+  ]);
+  const history = historyRows
+    .filter((row) => row.role === 'user' || row.role === 'assistant')
+    .map((row) => ({role: row.role as 'user' | 'assistant', content: row.content}));
+
+  const extraction = await extractBriefSignals({
+    locale: params.locale,
+    message: params.message,
+    history,
+    conversationId: params.conversation.id
+  });
+  const captured = sanitizeSafetyCapturedSignals(params.reason, extraction.fields);
+
+  if (captured.fullName || captured.email || captured.phone || captured.telegramHandle) {
+    const claimStatus = params.conversation.identity_state === 'verified' ? 'verified' : 'captured';
+    try {
+      await touchCustomerContacts({
+        customerId: params.conversation.customer_id,
+        fullName: captured.fullName ?? undefined,
+        email: captured.email ?? undefined,
+        phone: captured.phone ?? undefined,
+        locale: params.locale
+      });
+      await touchIdentityContacts({
+        customerId: params.conversation.customer_id,
+        channel: 'web',
+        channelUserId: params.conversation.channel_user_id ?? params.conversation.id,
+        email: captured.email ?? undefined,
+        phone: captured.phone ?? undefined,
+        telegramHandle: captured.telegramHandle ?? undefined
+      });
+      await captureIdentityClaims({
+        conversationId: params.conversation.id,
+        customerId: params.conversation.customer_id,
+        sourceChannel: 'web',
+        email: captured.email ?? null,
+        phone: captured.phone ?? null,
+        telegramHandle: captured.telegramHandle ?? null,
+        status: claimStatus
+      });
+    } catch {
+      // Safety warning flow should not fail on enrichment writes.
+    }
+  }
+
+  const mergedBrief = {
+    fullName: existingBrief?.fullName ?? captured.fullName ?? null,
+    email: existingBrief?.email ?? captured.email ?? null,
+    phone: existingBrief?.phone ?? captured.phone ?? null,
+    telegramHandle: existingBrief?.telegramHandle ?? captured.telegramHandle ?? null,
+    serviceType: captured.serviceType ?? existingBrief?.serviceType ?? null,
+    primaryGoal: preferRichText(existingBrief?.primaryGoal ?? null, captured.primaryGoal, 16),
+    firstDeliverable: preferRichText(existingBrief?.firstDeliverable ?? null, captured.firstDeliverable, 14),
+    timelineHint: captured.timelineHint ?? existingBrief?.timelineHint ?? null,
+    budgetHint: captured.budgetHint ?? existingBrief?.budgetHint ?? null,
+    referralSource: preferRichText(existingBrief?.referralSource ?? null, captured.referralSource, 6),
+    constraints: preferRichText(existingBrief?.constraints ?? null, captured.constraints, 12),
+    briefStructured: existingBrief?.briefStructured ?? null,
+    briefStructuredVersion: existingBrief?.briefStructuredVersion ?? 'v1'
+  };
+  const computed = computeLeadBriefState(mergedBrief, {highIntent: false});
+
+  const updatedBrief = await upsertLeadBrief({
+    conversationId: params.conversation.id,
+    customerId: params.conversation.customer_id,
+    sourceChannel: 'web',
+    updatedBy: 'ai',
+    status: computed.status,
+    missingFields: computed.missingFields,
+    completenessScore: computed.completenessScore,
+    patch: {
+      fullName: mergedBrief.fullName,
+      email: mergedBrief.email,
+      phone: mergedBrief.phone,
+      telegramHandle: mergedBrief.telegramHandle,
+      serviceType: mergedBrief.serviceType,
+      primaryGoal: mergedBrief.primaryGoal,
+      firstDeliverable: mergedBrief.firstDeliverable,
+      timelineHint: mergedBrief.timelineHint,
+      budgetHint: mergedBrief.budgetHint,
+      referralSource: mergedBrief.referralSource,
+      constraints: mergedBrief.constraints,
+      briefStructured: mergedBrief.briefStructured,
+      briefStructuredVersion: mergedBrief.briefStructuredVersion
+    }
+  });
+
+  if (existingBrief) {
+    const fieldsToCheck: Array<keyof typeof updatedBrief> = [
+      'status',
+      'fullName',
+      'email',
+      'phone',
+      'telegramHandle',
+      'serviceType',
+      'primaryGoal',
+      'firstDeliverable',
+      'timelineHint',
+      'budgetHint',
+      'referralSource',
+      'constraints',
+      'briefStructured',
+      'briefStructuredVersion',
+      'completenessScore',
+      'missingFields'
+    ];
+    const changed = fieldsToCheck.some((field) => JSON.stringify(existingBrief[field]) !== JSON.stringify(updatedBrief[field]));
+    if (changed) {
+      await appendLeadBriefRevision({
+        leadBriefId: updatedBrief.id,
+        changedByType: 'ai',
+        beforeState: {brief: existingBrief},
+        afterState: {brief: updatedBrief},
+        note: 'Safety warning: context merged from same turn'
+      });
+    }
+  } else {
+    await appendLeadBriefRevision({
+      leadBriefId: updatedBrief.id,
+      changedByType: 'ai',
+      beforeState: {},
+      afterState: {brief: updatedBrief},
+      note: 'Safety warning: initial brief capture from same turn'
+    });
+  }
+
+  return {
+    computed,
+    llmExtractionBypassed: extraction.deterministicFallback
   };
 }
 
@@ -351,6 +519,9 @@ async function handleLowCostWebMessage(params: {
     role: 'assistant',
     content: answer,
     metadata: {
+      engineVersion: getConfiguredDialogEngineVersion(),
+      dialogNextSlot: briefComputed.nextSlot ?? null,
+      dialogMode: 'context_continuation',
       chatMode,
       llmBypassed: lowCostAssistant.llmBypassed,
       llmExtractionBypassed,
@@ -521,12 +692,31 @@ export async function POST(request: NextRequest) {
     }
 
     if (safetyDecision.action === 'warn') {
+      let mergedWarningContext: Awaited<ReturnType<typeof persistSafetyWarningContext>> | null = null;
+      try {
+        mergedWarningContext = await persistSafetyWarningContext({
+          conversation,
+          locale: payload.data.locale,
+          message: payload.data.message,
+          reason: safetyDecision.reason
+        });
+      } catch (error) {
+        console.warn('[chat:safety] failed to persist warning context', {
+          conversationId: conversation.id,
+          reason: safetyDecision.reason,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
       const answer = getSafetyWarningMessage(payload.data.locale, safetyDecision.reason, safetyDecision.attemptsLeft);
       await appendConversationMessage({
         conversationId: conversation.id,
         role: 'assistant',
         content: answer,
         metadata: {
+          engineVersion: getConfiguredDialogEngineVersion(),
+          dialogMode: 'context_continuation',
+          dialogNextSlot: mergedWarningContext?.computed.nextSlot ?? null,
+          llmExtractionBypassed: mergedWarningContext?.llmExtractionBypassed ?? null,
           safetyViolation: safetyDecision.reason,
           safetyAction: 'warn',
           invalidStrikes: safetyDecision.invalidStrikes,
@@ -544,7 +734,11 @@ export async function POST(request: NextRequest) {
         reason: safetyDecision.reason,
         chatLocked: false,
         chatMode: 'normal',
-        sessionClosed: false
+        sessionClosed: false,
+        conversationStage: mergedWarningContext?.computed.conversationStage,
+        missingFields: mergedWarningContext?.computed.missingFields,
+        handoffReady: mergedWarningContext?.computed.handoffReady,
+        dialogMode: 'context_continuation'
       }));
       setCooldownCookie(response);
       return response;
@@ -723,6 +917,18 @@ export async function POST(request: NextRequest) {
       : undefined,
     parseFailReason: typeof result.metadata?.parseFailReason === 'string'
       ? String(result.metadata?.parseFailReason)
+      : undefined,
+    dialogTurnMode: typeof result.metadata?.dialogTurnMode === 'string'
+      ? String(result.metadata?.dialogTurnMode)
+      : undefined,
+    questionsCount: typeof result.metadata?.questionsCount === 'number'
+      ? Number(result.metadata?.questionsCount)
+      : undefined,
+    fallbackPath: typeof result.metadata?.fallbackPath === 'string'
+      ? String(result.metadata?.fallbackPath)
+      : undefined,
+    validatorAdjusted: typeof result.metadata?.validatorAdjusted === 'boolean'
+      ? Boolean(result.metadata?.validatorAdjusted)
       : undefined,
     extractLatencyMs: typeof result.metadata?.extractLatencyMs === 'number'
       ? Number(result.metadata?.extractLatencyMs)

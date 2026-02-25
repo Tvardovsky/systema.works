@@ -8,6 +8,9 @@ import {AdminLocaleSwitcher} from '@/components/AdminLocaleSwitcher';
 type ConversationStatus = 'open' | 'qualified' | 'hot' | 'handoff' | 'closed';
 type ReadFilter = 'all' | 'personal_unread' | 'personal_read';
 type SortMode = 'unread_first' | 'updated_desc';
+type ReadinessFilter = 'all' | 'ready' | 'not_ready';
+type MissingSlotFilter = 'all' | 'serviceType' | 'primaryGoal' | 'timeline_or_budget' | 'contact';
+type NextSlotFilter = 'all' | 'serviceType' | 'primaryGoal' | 'firstDeliverable' | 'timeline' | 'budget' | 'contact' | 'fullName' | 'referralSource' | 'handoff' | 'scope';
 
 type PipelineItem = {
   conversation: {
@@ -62,6 +65,13 @@ type PipelineItem = {
     createdAt: string;
   } | null;
   verificationLevel: 'unverified' | 'verified_channel' | 'verified_phone' | 'verified_strong';
+  dialog?: {
+    engineVersion: string | null;
+    readiness: 'ready' | 'not_ready';
+    missingCoreSlots: Array<'serviceType' | 'primaryGoal' | 'timeline_or_budget' | 'contact'>;
+    nextSlot: string | null;
+    hasStructuredBrief: boolean;
+  };
 };
 
 type Message = {
@@ -69,6 +79,17 @@ type Message = {
   role: string;
   content: string;
   created_at: string;
+  metadata?: {
+    engineVersion: string | null;
+    dialogNextSlot: string | null;
+    dialogMode: string | null;
+    safetyReason: string | null;
+    chatMode: string | null;
+    dialogTurnMode: string | null;
+    questionsCount: number | null;
+    fallbackPath: string | null;
+    validatorAdjusted: boolean | null;
+  } | null;
 };
 
 type BriefBundle = {
@@ -86,6 +107,8 @@ type BriefBundle = {
     budgetHint: string | null;
     referralSource: string | null;
     constraints: string | null;
+    briefStructured: Record<string, unknown> | null;
+    briefStructuredVersion: string;
     missingFields: string[];
     completenessScore: number;
   } | null;
@@ -176,6 +199,8 @@ type CustomerContext = {
     missingFields: string[];
     completenessScore: number;
     referralSource?: string | null;
+    briefStructured?: Record<string, unknown> | null;
+    briefStructuredVersion?: string | null;
   } | null;
   readStateSummary?: {
     personalUnread: number;
@@ -237,6 +262,15 @@ type BriefDraft = {
   note: string;
 };
 
+type ExtractionDiagnosticsRow = {
+  slot: string;
+  value: string;
+  state: string;
+  confidence: string;
+  source: string;
+  evidence: string;
+};
+
 const EMPTY_BRIEF_DRAFT: BriefDraft = {
   fullName: '',
   email: '',
@@ -263,6 +297,105 @@ function fmtDate(input?: string | null): string {
   return d.toLocaleString();
 }
 
+function cleanText(input: unknown): string | null {
+  if (typeof input !== 'string') {
+    return null;
+  }
+  const normalized = input.trim().replace(/\s+/g, ' ');
+  return normalized || null;
+}
+
+function slotLabelKey(slot: string): string {
+  if (slot === 'serviceType') {
+    return 'fields.serviceType';
+  }
+  if (slot === 'primaryGoal') {
+    return 'fields.primaryGoal';
+  }
+  if (slot === 'firstDeliverable') {
+    return 'fields.firstDeliverable';
+  }
+  if (slot === 'timeline') {
+    return 'fields.timeline';
+  }
+  if (slot === 'budget') {
+    return 'fields.budget';
+  }
+  if (slot === 'fullName') {
+    return 'fields.fullName';
+  }
+  if (slot === 'referralSource') {
+    return 'fields.referralSource';
+  }
+  if (slot === 'contact') {
+    return 'fields.contact';
+  }
+  return 'labels.details';
+}
+
+function missingSlotLabelKey(slot: MissingSlotFilter): string {
+  if (slot === 'serviceType') {
+    return 'fields.serviceType';
+  }
+  if (slot === 'primaryGoal') {
+    return 'fields.primaryGoal';
+  }
+  if (slot === 'timeline_or_budget') {
+    return 'labels.timelineOrBudget';
+  }
+  if (slot === 'contact') {
+    return 'fields.contact';
+  }
+  return 'labels.details';
+}
+
+function nextSlotLabelKey(slot: string | null | undefined): string {
+  if (!slot) {
+    return 'common.none';
+  }
+  if (slot === 'scope') {
+    return 'labels.scope';
+  }
+  if (slot === 'handoff') {
+    return 'labels.handoff';
+  }
+  return slotLabelKey(slot);
+}
+
+function buildDiagnosticsRows(structured?: Record<string, unknown> | null): ExtractionDiagnosticsRow[] {
+  if (!structured || typeof structured !== 'object' || Array.isArray(structured)) {
+    return [];
+  }
+  const slotsRaw = (structured as {slots?: unknown}).slots;
+  if (!slotsRaw || typeof slotsRaw !== 'object' || Array.isArray(slotsRaw)) {
+    return [];
+  }
+  const slots = slotsRaw as Record<string, unknown>;
+  const order = ['serviceType', 'primaryGoal', 'firstDeliverable', 'timeline', 'budget', 'contact', 'fullName', 'referralSource'];
+  return order
+    .map((slot) => {
+      const rawSlot = slot === 'contact'
+        ? ((slots.contact && typeof slots.contact === 'object' && !Array.isArray(slots.contact))
+            ? ((slots.contact as {aggregate?: unknown}).aggregate ?? null)
+            : null)
+        : slots[slot];
+      if (!rawSlot || typeof rawSlot !== 'object' || Array.isArray(rawSlot)) {
+        return null;
+      }
+      const slotObj = rawSlot as Record<string, unknown>;
+      const confidenceRaw = typeof slotObj.confidence === 'number' ? slotObj.confidence : null;
+      return {
+        slot,
+        value: cleanText(slotObj.value) ?? '-',
+        state: cleanText(slotObj.state) ?? 'unknown',
+        confidence: confidenceRaw === null ? '-' : confidenceRaw.toFixed(2),
+        source: cleanText(slotObj.source) ?? '-',
+        evidence: cleanText(slotObj.evidence) ?? '-'
+      };
+    })
+    .filter((row): row is ExtractionDiagnosticsRow => row !== null);
+}
+
 type Props = {
   locale: 'ru' | 'en';
   role: 'owner' | 'manager' | 'viewer';
@@ -276,6 +409,9 @@ export function AdminDashboard({locale, role}: Props) {
   const [statusFilter, setStatusFilter] = useState<'all' | ConversationStatus>('all');
   const [readFilter, setReadFilter] = useState<ReadFilter>('all');
   const [sort, setSort] = useState<SortMode>('unread_first');
+  const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>('all');
+  const [missingSlotFilter, setMissingSlotFilter] = useState<MissingSlotFilter>('all');
+  const [nextSlotFilter, setNextSlotFilter] = useState<NextSlotFilter>('all');
 
   const [pipeline, setPipeline] = useState<FetchState<PipelineItem[]>>({loading: true, error: null, data: []});
   const [messages, setMessages] = useState<FetchState<Message[]>>({loading: false, error: null, data: []});
@@ -315,6 +451,10 @@ export function AdminDashboard({locale, role}: Props) {
     () => pipeline.data.find((item) => item.conversation.id === selectedConversationId) ?? null,
     [pipeline.data, selectedConversationId]
   );
+  const extractionDiagnosticsRows = useMemo(
+    () => buildDiagnosticsRows(briefBundle.data?.brief?.briefStructured ?? null),
+    [briefBundle.data?.brief?.briefStructured]
+  );
 
   const grouped = useMemo(() => {
     const groups: Record<'open' | 'qualified' | 'hot' | 'handoff', PipelineItem[]> = {
@@ -353,6 +493,15 @@ export function AdminDashboard({locale, role}: Props) {
       if (statusFilter !== 'all') {
         params.set('status', statusFilter);
       }
+      if (readinessFilter !== 'all') {
+        params.set('readiness', readinessFilter);
+      }
+      if (missingSlotFilter !== 'all') {
+        params.set('missingSlot', missingSlotFilter);
+      }
+      if (nextSlotFilter !== 'all') {
+        params.set('nextSlot', nextSlotFilter);
+      }
       if (query.trim()) {
         params.set('q', query.trim());
       }
@@ -372,7 +521,18 @@ export function AdminDashboard({locale, role}: Props) {
     } catch (error) {
       setPipeline({loading: false, error: error instanceof Error ? error.message : t('errors.pipelineLoad'), data: []});
     }
-  }, [fetchAdmin, query, readFilter, selectedConversationId, sort, statusFilter, t]);
+  }, [
+    fetchAdmin,
+    missingSlotFilter,
+    nextSlotFilter,
+    query,
+    readFilter,
+    readinessFilter,
+    selectedConversationId,
+    sort,
+    statusFilter,
+    t
+  ]);
 
   const loadConversationDetails = useCallback(async (conversationId: string, customerId: string) => {
     setMessages({loading: true, error: null, data: []});
@@ -741,6 +901,31 @@ export function AdminDashboard({locale, role}: Props) {
                   <option value="unread_first">{t('filters.sortUnreadFirst')}</option>
                   <option value="updated_desc">{t('filters.sortUpdated')}</option>
                 </select>
+                <select className="select select-bordered join-item" value={readinessFilter} onChange={(event) => setReadinessFilter(event.target.value as ReadinessFilter)}>
+                  <option value="all">{t('filters.readinessAll')}</option>
+                  <option value="ready">{t('filters.readinessReady')}</option>
+                  <option value="not_ready">{t('filters.readinessNotReady')}</option>
+                </select>
+                <select className="select select-bordered join-item" value={missingSlotFilter} onChange={(event) => setMissingSlotFilter(event.target.value as MissingSlotFilter)}>
+                  <option value="all">{t('filters.missingSlotAll')}</option>
+                  <option value="serviceType">{t('fields.serviceType')}</option>
+                  <option value="primaryGoal">{t('fields.primaryGoal')}</option>
+                  <option value="timeline_or_budget">{t('labels.timelineOrBudget')}</option>
+                  <option value="contact">{t('fields.contact')}</option>
+                </select>
+                <select className="select select-bordered join-item" value={nextSlotFilter} onChange={(event) => setNextSlotFilter(event.target.value as NextSlotFilter)}>
+                  <option value="all">{t('filters.nextSlotAll')}</option>
+                  <option value="serviceType">{t('fields.serviceType')}</option>
+                  <option value="primaryGoal">{t('fields.primaryGoal')}</option>
+                  <option value="firstDeliverable">{t('fields.firstDeliverable')}</option>
+                  <option value="timeline">{t('fields.timeline')}</option>
+                  <option value="budget">{t('fields.budget')}</option>
+                  <option value="contact">{t('fields.contact')}</option>
+                  <option value="fullName">{t('fields.fullName')}</option>
+                  <option value="referralSource">{t('fields.referralSource')}</option>
+                  <option value="handoff">{t('labels.handoff')}</option>
+                  <option value="scope">{t('labels.scope')}</option>
+                </select>
               </div>
               <label className="input input-bordered w-full">
                 <input
@@ -816,8 +1001,17 @@ export function AdminDashboard({locale, role}: Props) {
               {!pipeline.loading && !pipeline.error && pipeline.data.length === 0 ? (
                 <div className="admin-empty-state">
                   <p className="text-sm opacity-75">{t('empty.pipeline')}</p>
-                  {readFilter !== 'all' ? (
-                    <button className="btn btn-sm btn-outline" type="button" onClick={() => setReadFilter('all')}>
+                  {readFilter !== 'all' || readinessFilter !== 'all' || missingSlotFilter !== 'all' || nextSlotFilter !== 'all' ? (
+                    <button
+                      className="btn btn-sm btn-outline"
+                      type="button"
+                      onClick={() => {
+                        setReadFilter('all');
+                        setReadinessFilter('all');
+                        setMissingSlotFilter('all');
+                        setNextSlotFilter('all');
+                      }}
+                    >
                       {t('actions.showAllLeads')}
                     </button>
                   ) : null}
@@ -864,11 +1058,17 @@ export function AdminDashboard({locale, role}: Props) {
                                 {item.conversation.isNewForAdmin ? <span className="badge badge-info badge-sm">{t('badges.new')}</span> : null}
                                 {item.conversation.personalUnread ? <span className="badge badge-error badge-sm">{t('badges.unread')}</span> : null}
                                 {item.conversation.globalUnread && !item.conversation.personalUnread ? <span className="badge badge-warning badge-sm">{t('badges.teamUnread')}</span> : null}
+                                {item.dialog?.readiness === 'ready' ? <span className="badge badge-success badge-sm">{t('badges.ready')}</span> : null}
+                                {item.dialog?.readiness === 'not_ready' ? <span className="badge badge-neutral badge-sm">{t('badges.notReady')}</span> : null}
+                                {item.dialog?.engineVersion ? <span className="badge badge-outline badge-sm">{`${t('labels.engineVersion')}: ${item.dialog.engineVersion}`}</span> : null}
                               </div>
                               <div className="admin-v2-item-meta text-xs opacity-80">
                                 <span className="truncate">{item.customer.company ?? '-'}</span>
                                 <span>{t('labels.score')}: {item.conversation.leadIntentScore}</span>
                               </div>
+                              {item.dialog?.nextSlot ? (
+                                <p className="text-[11px] opacity-70">{`${t('labels.nextSlot')}: ${t(nextSlotLabelKey(item.dialog.nextSlot))}`}</p>
+                              ) : null}
                               <p className="text-[11px] opacity-70">{fmtDate(item.conversation.updatedAt)}</p>
                             </button>
                           </li>
@@ -915,8 +1115,22 @@ export function AdminDashboard({locale, role}: Props) {
                       <dd>{fmtDate(selectedItem.conversation.lastInboundMessageAt)}</dd>
                       <dt>{t('labels.briefCompleteness')}</dt>
                       <dd>{selectedItem.brief?.completenessScore ?? 0}%</dd>
+                      <dt>{t('labels.readiness')}</dt>
+                      <dd>
+                        {selectedItem.dialog?.readiness
+                          ? t(selectedItem.dialog.readiness === 'ready' ? 'filters.readinessReady' : 'filters.readinessNotReady')
+                          : '-'}
+                      </dd>
+                      <dt>{t('labels.nextSlot')}</dt>
+                      <dd>{selectedItem.dialog?.nextSlot ? t(nextSlotLabelKey(selectedItem.dialog.nextSlot)) : '-'}</dd>
+                      <dt>{t('labels.engineVersion')}</dt>
+                      <dd>{selectedItem.dialog?.engineVersion ?? (selectedItem.dialog?.hasStructuredBrief ? 'v2' : t('labels.legacyMode'))}</dd>
                       <dt>{t('labels.missingFields')}</dt>
-                      <dd>{(selectedItem.brief?.missingFields ?? []).join(', ') || t('common.none')}</dd>
+                      <dd>
+                        {selectedItem.dialog?.missingCoreSlots?.length
+                          ? selectedItem.dialog.missingCoreSlots.map((slot) => t(missingSlotLabelKey(slot))).join(', ')
+                          : ((selectedItem.brief?.missingFields ?? []).join(', ') || t('common.none'))}
+                      </dd>
                     </dl>
                   ) : (
                     <p className="text-sm opacity-75">{t('common.selectLead')}</p>
@@ -1110,6 +1324,45 @@ export function AdminDashboard({locale, role}: Props) {
                   <input className="input input-bordered input-sm" value={briefDraft.note} onChange={(e) => setBriefDraft((p) => ({...p, note: e.target.value}))} suppressHydrationWarning />
                 </label>
 
+                <section className="rounded-box border border-base-300 bg-base-200/30 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-primary">{t('sections.extractionDiagnostics')}</h3>
+                    <span className="badge badge-outline badge-sm">
+                      {briefBundle.data?.brief?.briefStructuredVersion ?? t('labels.legacyMode')}
+                    </span>
+                  </div>
+                  {extractionDiagnosticsRows.length ? (
+                    <div className="overflow-x-auto">
+                      <table className="table table-xs">
+                        <thead>
+                          <tr>
+                            <th>{t('labels.slot')}</th>
+                            <th>{t('labels.value')}</th>
+                            <th>{t('labels.state')}</th>
+                            <th>{t('labels.confidence')}</th>
+                            <th>{t('labels.source')}</th>
+                            <th>{t('labels.evidence')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {extractionDiagnosticsRows.map((row) => (
+                            <tr key={row.slot}>
+                              <td>{t(slotLabelKey(row.slot))}</td>
+                              <td>{row.value}</td>
+                              <td>{row.state}</td>
+                              <td>{row.confidence}</td>
+                              <td>{row.source}</td>
+                              <td>{row.evidence}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-xs opacity-70">{t('labels.legacyMode')}</p>
+                  )}
+                </section>
+
                 <div>
                   <strong className="text-sm text-primary">{t('sections.auditLog')}</strong>
                   {(briefBundle.data?.revisions ?? []).length ? (
@@ -1154,6 +1407,22 @@ export function AdminDashboard({locale, role}: Props) {
                 <div className="admin-chat">
                   {messages.data.map((item) => {
                     const isUser = item.role === 'user';
+                    const metadataParts = !isUser && item.metadata
+                      ? [
+                          item.metadata.engineVersion ? `${t('labels.engineVersion')}: ${item.metadata.engineVersion}` : null,
+                          item.metadata.dialogNextSlot ? `${t('labels.nextSlot')}: ${t(nextSlotLabelKey(item.metadata.dialogNextSlot))}` : null,
+                          item.metadata.dialogMode ? `${t('labels.mode')}: ${item.metadata.dialogMode}` : null,
+                          item.metadata.dialogTurnMode ? `${t('labels.turnMode')}: ${item.metadata.dialogTurnMode}` : null,
+                          typeof item.metadata.questionsCount === 'number' ? `${t('labels.questionsCount')}: ${item.metadata.questionsCount}` : null,
+                          item.metadata.fallbackPath ? `${t('labels.fallbackPath')}: ${item.metadata.fallbackPath}` : null,
+                          typeof item.metadata.validatorAdjusted === 'boolean'
+                            ? `${t('labels.validatorAdjusted')}: ${item.metadata.validatorAdjusted ? 'yes' : 'no'}`
+                            : null,
+                          item.metadata.safetyReason ? `${t('labels.safety')}: ${item.metadata.safetyReason}` : null,
+                          item.metadata.chatMode ? `${t('labels.chatMode')}: ${item.metadata.chatMode}` : null
+                        ].filter((part): part is string => Boolean(part))
+                      : [];
+                    const metadataLine = metadataParts.join(' · ');
                     return (
                       <div key={item.id} className={`chat ${isUser ? 'chat-end' : 'chat-start'}`}>
                         <div className="chat-header text-[11px] opacity-70">
@@ -1161,6 +1430,7 @@ export function AdminDashboard({locale, role}: Props) {
                           <time className="ml-2">{fmtDate(item.created_at)}</time>
                         </div>
                         <div className={`chat-bubble ${isUser ? 'chat-bubble-primary' : 'chat-bubble-neutral'}`}>{item.content}</div>
+                        {metadataLine ? <div className="chat-footer admin-chat-meta">{metadataLine}</div> : null}
                       </div>
                     );
                   })}

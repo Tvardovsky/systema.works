@@ -1,9 +1,10 @@
 import {randomUUID} from 'crypto';
 import {generateAgencyReply, generateHandoffTerminalReply} from '@/lib/ai';
+import {extractBriefSignals} from '@/lib/brief-extractor';
 import {computeLeadBriefState, isHighIntentMessage} from '@/lib/lead-brief';
 import {resolveLeadPriority} from '@/lib/lead';
-import {extractLeadSignals, getQualificationPrompt, hasAreaSignal, hasExplicitBudgetSignal} from '@/lib/lead-signals';
-import {extractBriefSignals} from '@/lib/brief-extractor';
+import {extractLeadSignals, getQualificationPrompt} from '@/lib/lead-signals';
+import {runDialogV2Turn} from '@/lib/dialog-v2/engine';
 import {
   appendLeadBriefRevision,
   appendConversationMessage,
@@ -106,19 +107,53 @@ function readAiRuntimeState(metadata?: Record<string, unknown> | null): {
   if (!raw || typeof raw !== 'object') {
     return {llmReplyDeferred: false, deferReason: null};
   }
-  const deferReasonRaw = typeof raw.deferReason === 'string' ? raw.deferReason : null;
-  const deferReason = (
-    deferReasonRaw === 'quota'
-    || deferReasonRaw === 'rate_limit'
-    || deferReasonRaw === 'connection'
-    || deferReasonRaw === 'parse_error'
+  const reason = typeof raw.deferReason === 'string' ? raw.deferReason : null;
+  const deferReason: AiRuntimeDeferReason | null = (
+    reason === 'quota'
+    || reason === 'rate_limit'
+    || reason === 'connection'
+    || reason === 'parse_error'
   )
-    ? deferReasonRaw
+    ? reason
     : null;
   return {
     llmReplyDeferred: Boolean(raw.llmReplyDeferred),
     deferReason
   };
+}
+type TurnExtractedSignals = {
+  fullName: string | null;
+  email: string | null;
+  phone: string | null;
+  telegramHandle: string | null;
+  serviceType: string | null;
+  primaryGoal: string | null;
+  firstDeliverable: string | null;
+  timelineHint: string | null;
+  budgetHint: string | null;
+  referralSource: string | null;
+  constraints: string | null;
+};
+
+type ChatDialogRuntime = 'legacy_v1' | 'v2_deterministic' | 'v3_llm_first';
+type ChatEngineVersion = 'v1' | 'v2' | 'v3';
+
+function getChatDialogRuntime(): ChatDialogRuntime {
+  const configured = process.env.CHAT_DIALOG_MODE?.toLowerCase();
+  if (configured === 'v2_deterministic' || configured === 'v3_llm_first') {
+    return configured;
+  }
+  if (process.env.CHAT_ENGINE_VERSION?.toLowerCase() === 'v1') {
+    return 'legacy_v1';
+  }
+  return 'v3_llm_first';
+}
+
+function getChatEngineVersion(runtime: ChatDialogRuntime): ChatEngineVersion {
+  if (runtime === 'legacy_v1') {
+    return 'v1';
+  }
+  return runtime === 'v3_llm_first' ? 'v3' : 'v2';
 }
 
 function mergeAiRuntimeMetadata(
@@ -201,28 +236,6 @@ function hasVerificationIntent(text: string): boolean {
     'profil',
     'povez'
   ].some((hint) => lower.includes(hint));
-}
-
-function isTimelineOrBudgetQuestion(text?: string | null): boolean {
-  if (!text) {
-    return false;
-  }
-  const lower = text.toLowerCase();
-  const hints = [
-    'срок',
-    'timeline',
-    'дедлайн',
-    'когда',
-    'budget',
-    'бюдж',
-    'ориентир',
-    'кошторис',
-    'термін',
-    'rok',
-    'budž',
-    'budzet'
-  ];
-  return hints.some((hint) => lower.includes(hint));
 }
 
 function composeBudgetFollowUp(params: {
@@ -621,21 +634,57 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       getLeadBriefByConversation(activeConversationId)
     ]);
     const conversationMetadata = ((conversationRow?.metadata ?? null) as Record<string, unknown> | null) ?? {};
-    const deferState = readAiRuntimeState(conversationMetadata);
 
     const syntheticHistory = history
       .filter((item) => item.role === 'user' || item.role === 'assistant')
       .map((item) => ({role: item.role as 'user' | 'assistant', content: item.content}));
 
+    const chatDialogRuntime = getChatDialogRuntime();
+    const chatEngineVersion = getChatEngineVersion(chatDialogRuntime);
     const extractStartedAt = Date.now();
-    const briefExtraction = await extractBriefSignals({
-      locale,
-      message: safeEvent.text,
-      history: syntheticHistory,
-      conversationId: activeConversationId
-    });
+    let briefExtraction: Awaited<ReturnType<typeof extractBriefSignals>> | null = null;
+    let dialogDecision: Awaited<ReturnType<typeof runDialogV2Turn>> | null = null;
+    const briefContext = {
+      fullName: existingBrief?.fullName ?? null,
+      email: existingBrief?.email ?? null,
+      phone: existingBrief?.phone ?? null,
+      telegramHandle: existingBrief?.telegramHandle ?? null,
+      serviceType: existingBrief?.serviceType ?? null,
+      primaryGoal: existingBrief?.primaryGoal ?? null,
+      firstDeliverable: existingBrief?.firstDeliverable ?? null,
+      timelineHint: existingBrief?.timelineHint ?? null,
+      budgetHint: existingBrief?.budgetHint ?? null,
+      referralSource: existingBrief?.referralSource ?? null,
+      constraints: existingBrief?.constraints ?? null,
+      missingFields: existingBrief?.missingFields ?? [],
+      completenessScore: existingBrief?.completenessScore ?? 0,
+      hasConversationContact: hasBriefConversationContact(existingBrief),
+      briefStructured: existingBrief?.briefStructured ?? null,
+      briefStructuredVersion: existingBrief?.briefStructuredVersion ?? null
+    };
+    let extractedSignals: TurnExtractedSignals;
+    if (chatDialogRuntime !== 'legacy_v1') {
+      dialogDecision = await runDialogV2Turn({
+        locale,
+        channel: safeEvent.channel,
+        message: safeEvent.text,
+        history: syntheticHistory.slice(-14),
+        identityState: effectiveIdentityState,
+        briefContext,
+        runtimeMode: chatDialogRuntime,
+        conversationId: activeConversationId
+      });
+      extractedSignals = dialogDecision.extractedFields;
+    } else {
+      briefExtraction = await extractBriefSignals({
+        locale,
+        message: safeEvent.text,
+        history: syntheticHistory.slice(-14),
+        conversationId: activeConversationId
+      });
+      extractedSignals = briefExtraction.fields;
+    }
     const extractLatencyMs = Date.now() - extractStartedAt;
-    const extractedSignals = briefExtraction.fields;
     if (
       extractedSignals.fullName ||
       extractedSignals.email ||
@@ -709,7 +758,13 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       timelineHint: extractedSignals.timelineHint ?? existingBrief?.timelineHint ?? null,
       budgetHint: extractedSignals.budgetHint ?? existingBrief?.budgetHint ?? null,
       referralSource: preferRichText(existingBrief?.referralSource ?? null, extractedSignals.referralSource, 6),
-      constraints: preferRichText(existingBrief?.constraints ?? null, extractedSignals.constraints, 12)
+      constraints: preferRichText(existingBrief?.constraints ?? null, extractedSignals.constraints, 12),
+      briefStructured: dialogDecision
+        ? (dialogDecision.structuredBrief as Record<string, unknown>)
+        : (existingBrief?.briefStructured ?? null),
+      briefStructuredVersion: dialogDecision
+        ? chatEngineVersion
+        : (existingBrief?.briefStructuredVersion ?? 'v1')
     };
     const briefComputed = computeLeadBriefState(mergedBrief, {
       highIntent: isHighIntentMessage(safeEvent.text)
@@ -720,7 +775,7 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       ? (['contact', ...briefComputed.missingFields] as LeadBriefField[])
       : briefComputed.missingFields;
     const forcedHandoffReady = briefComputed.handoffReady && (!requiresFreshWebContact || hasConversationContactAfterMerge);
-    const forcedCompletenessScore = Math.max(0, Math.min(100, Math.round(((5 - forcedMissingFields.length) / 5) * 100)));
+    const forcedCompletenessScore = Math.max(0, Math.min(100, Math.round(((4 - forcedMissingFields.length) / 4) * 100)));
     const forcedStatus = forcedHandoffReady ? briefComputed.status : 'collecting';
 
     const updatedBrief = await upsertLeadBrief({
@@ -731,7 +786,21 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       status: forcedStatus,
       missingFields: forcedMissingFields,
       completenessScore: forcedCompletenessScore,
-      patch: mergedBrief
+      patch: {
+        fullName: mergedBrief.fullName,
+        email: mergedBrief.email,
+        phone: mergedBrief.phone,
+        telegramHandle: mergedBrief.telegramHandle,
+        serviceType: mergedBrief.serviceType,
+        primaryGoal: mergedBrief.primaryGoal,
+        firstDeliverable: mergedBrief.firstDeliverable,
+        timelineHint: mergedBrief.timelineHint,
+        budgetHint: mergedBrief.budgetHint,
+        referralSource: mergedBrief.referralSource,
+        constraints: mergedBrief.constraints,
+        briefStructured: mergedBrief.briefStructured,
+        briefStructuredVersion: mergedBrief.briefStructuredVersion
+      }
     });
     const hasConversationContact = hasBriefConversationContact(updatedBrief);
 
@@ -749,6 +818,8 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         'budgetHint',
         'referralSource',
         'constraints',
+        'briefStructured',
+        'briefStructuredVersion',
         'completenessScore',
         'missingFields'
       ];
@@ -780,33 +851,31 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
     }
 
     const replyStartedAt = Date.now();
-    let reply = await generateAgencyReply({
-      locale,
-      message: safeEvent.text,
-      history: syntheticHistory.slice(-12),
-      conversationId: activeConversationId,
-      identityState: effectiveIdentityState,
-      memoryLoaded: memoryAllowed && Boolean(memory?.summary),
-      verificationHint,
-      channel: safeEvent.channel,
-      deferState,
-      briefContext: {
-        fullName: updatedBrief.fullName,
-        email: updatedBrief.email,
-        phone: updatedBrief.phone,
-        telegramHandle: updatedBrief.telegramHandle,
-        serviceType: updatedBrief.serviceType,
-        primaryGoal: updatedBrief.primaryGoal,
-        firstDeliverable: updatedBrief.firstDeliverable,
-        timelineHint: updatedBrief.timelineHint,
-        budgetHint: updatedBrief.budgetHint,
-        referralSource: updatedBrief.referralSource,
-        constraints: updatedBrief.constraints,
-        missingFields: forcedMissingFields,
-        completenessScore: forcedCompletenessScore,
-        hasConversationContact
-      }
-    });
+    let reply = dialogDecision
+      ? {
+          ...dialogDecision.response,
+          identityState: effectiveIdentityState,
+          memoryLoaded: memoryAllowed && Boolean(memory?.summary),
+          verificationHint
+        }
+      : await generateAgencyReply({
+          locale,
+          message: safeEvent.text,
+          history: syntheticHistory.slice(-14),
+          conversationId: activeConversationId,
+          identityState: effectiveIdentityState,
+          memoryLoaded: memoryAllowed && Boolean(memory?.summary),
+          verificationHint,
+          briefContext: {
+            ...briefContext,
+            ...mergedBrief,
+            missingFields: forcedMissingFields,
+            completenessScore: forcedCompletenessScore,
+            hasConversationContact: hasConversationContactAfterMerge
+          },
+          deferState: readAiRuntimeState(conversationMetadata),
+          channel: safeEvent.channel
+        });
     const replyLatencyMs = reply.replyLatencyMs ?? (Date.now() - replyStartedAt);
 
     if (requiresFreshWebContact && !hasConversationContact) {
@@ -818,42 +887,6 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         handoffReady: false,
         missingFields: dedupedMissing,
         conversationStage: 'contact_capture'
-      };
-    }
-
-    const lastAssistantQuestion = [...syntheticHistory]
-      .reverse()
-      .find((item) => item.role === 'assistant')?.content;
-    const answeredTimelineOrBudgetQuestion = isTimelineOrBudgetQuestion(lastAssistantQuestion)
-      && Boolean(extractedSignals.timelineHint || extractedSignals.budgetHint);
-
-    const shouldClarifyAreaBudget = briefExtraction.shouldAskClarification
-      && briefExtraction.clarificationType === 'budget'
-      && hasAreaSignal(safeEvent.text)
-      && !hasExplicitBudgetSignal(safeEvent.text)
-      && !answeredTimelineOrBudgetQuestion
-      && !updatedBrief.budgetHint;
-    if (shouldClarifyAreaBudget) {
-      const dedupedMissing = reply.missingFields.includes('timeline_or_budget')
-        ? reply.missingFields
-        : (['timeline_or_budget', ...reply.missingFields] as string[]);
-      const budgetQuestion = getQualificationPrompt({
-        locale,
-        hasScope: true,
-        hasBudget: false,
-        hasTimeline: Boolean(updatedBrief.timelineHint)
-      });
-      reply = {
-        ...reply,
-        answer: composeBudgetFollowUp({
-          currentAnswer: getAreaBudgetClarification(locale),
-          budgetQuestion
-        }),
-        nextQuestion: budgetQuestion,
-        handoffReady: false,
-        missingFields: dedupedMissing,
-        conversationStage: 'briefing',
-        leadIntentScore: Math.min(reply.leadIntentScore, 70)
       };
     }
 
@@ -949,7 +982,20 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
     await appendConversationMessage({
       conversationId: activeConversationId,
       role: 'assistant',
-      content: reply.answer
+      content: reply.answer,
+      metadata: {
+        dialogMode: reply.dialogMode ?? null,
+        engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
+        dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
+        dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
+        questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
+        fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
+        validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
+        chatMode,
+        chatLocked,
+        cooldownUntil: cooldownUntil ?? null,
+        retryAfterSeconds: retryAfterSeconds ?? null
+      }
     });
 
     await updateConversationStatus({
@@ -1017,7 +1063,9 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
           timelineHint: updatedBrief.timelineHint,
           budgetHint: updatedBrief.budgetHint,
           referralSource: updatedBrief.referralSource,
-          constraints: updatedBrief.constraints
+          constraints: updatedBrief.constraints,
+          briefStructured: updatedBrief.briefStructured,
+          briefStructuredVersion: updatedBrief.briefStructuredVersion
         }
       });
 
@@ -1067,13 +1115,22 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         memoryAccess: effectiveMemoryAccess,
         memoryLoaded: memoryAllowed && Boolean(memory?.summary),
         dialogMode: reply.dialogMode,
-        extractorUsed: briefExtraction.extractorUsed,
-        extractorModel: briefExtraction.extractorModel,
-        extractorDeterministicFallback: briefExtraction.deterministicFallback,
-        extractorAmbiguities: briefExtraction.ambiguities,
-        extractorFilledFields: Object.entries(briefExtraction.fields)
+        extractorUsed: true,
+        extractorModel: dialogDecision ? 'dialog-v2' : (briefExtraction?.extractorModel ?? 'legacy'),
+        extractorDeterministicFallback: dialogDecision ? false : Boolean(briefExtraction?.deterministicFallback),
+        extractorAmbiguities: dialogDecision ? [] : (briefExtraction?.ambiguities ?? []),
+        extractorFilledFields: Object.entries(extractedSignals)
           .filter(([, value]) => Boolean(cleanText(value)))
           .map(([key]) => key),
+        engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
+        dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
+        dialogRepeatGuardTriggered: dialogDecision?.diagnostics.repeatGuardTriggered ?? null,
+        dialogDeferredSlot: dialogDecision?.diagnostics.deferredSlot ?? null,
+        dialogDeferTurnsRemaining: dialogDecision?.diagnostics.deferTurnsRemaining ?? null,
+        dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
+        questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
+        fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
+        validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
         chatLocked,
         chatMode,
         cooldownUntil: cooldownUntil ?? null,
@@ -1099,8 +1156,18 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
     console.info('[orchestrator] turn telemetry', {
       conversationId: activeConversationId,
       channel: safeEvent.channel,
-      extractorUsed: briefExtraction.extractorUsed,
-      extractorDeterministicFallback: briefExtraction.deterministicFallback,
+      extractorUsed: true,
+      extractorDeterministicFallback: dialogDecision ? false : Boolean(briefExtraction?.deterministicFallback),
+      engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
+      dialogTopic: dialogDecision?.diagnostics.topic ?? null,
+      dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
+      dialogRepeatGuardTriggered: dialogDecision?.diagnostics.repeatGuardTriggered ?? null,
+      dialogDeferredSlot: dialogDecision?.diagnostics.deferredSlot ?? null,
+      dialogDeferTurnsRemaining: dialogDecision?.diagnostics.deferTurnsRemaining ?? null,
+      dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
+      questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
+      fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
+      validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
       llm_calls_count_per_turn: reply.llmCallsCount ?? null,
       json_repair_used: reply.jsonRepairUsed ?? null,
       same_model_fallback_skipped: reply.sameModelFallbackSkipped ?? null,
@@ -1132,13 +1199,22 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         memoryLoaded: memoryAllowed && Boolean(memory?.summary),
         verificationHint,
         dialogMode: reply.dialogMode,
-        extractorUsed: briefExtraction.extractorUsed,
-        extractorModel: briefExtraction.extractorModel,
-        extractorDeterministicFallback: briefExtraction.deterministicFallback,
-        extractorAmbiguities: briefExtraction.ambiguities,
-        extractorFilledFields: Object.entries(briefExtraction.fields)
+        extractorUsed: true,
+        extractorModel: dialogDecision ? 'dialog-v2' : (briefExtraction?.extractorModel ?? 'legacy'),
+        extractorDeterministicFallback: dialogDecision ? false : Boolean(briefExtraction?.deterministicFallback),
+        extractorAmbiguities: dialogDecision ? [] : (briefExtraction?.ambiguities ?? []),
+        extractorFilledFields: Object.entries(extractedSignals)
           .filter(([, value]) => Boolean(cleanText(value)))
           .map(([key]) => key),
+        engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
+        dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
+        dialogRepeatGuardTriggered: dialogDecision?.diagnostics.repeatGuardTriggered ?? null,
+        dialogDeferredSlot: dialogDecision?.diagnostics.deferredSlot ?? null,
+        dialogDeferTurnsRemaining: dialogDecision?.diagnostics.deferTurnsRemaining ?? null,
+        dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
+        questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
+        fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
+        validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
         chatLocked,
         chatMode,
         cooldownUntil: cooldownUntil ?? null,
