@@ -911,7 +911,7 @@ a:not(.btn) {
 
 .chat-input {
   width: 100%;
-  min-height: 44px;
+  min-height: 66px;
   max-height: 120px;
   border-radius: 1rem;
   border: 1px solid var(--line);
@@ -1229,6 +1229,25 @@ a:not(.btn) {
     right: 0.65rem;
     padding: 0.58rem 0.74rem;
     font-size: 0.8rem;
+  }
+  
+  /* Fix send button visibility under chat panel on mobile */
+  .chat-panel {
+    z-index: 120;
+    background: linear-gradient(155deg, rgba(248, 252, 254, 0.98), rgba(237, 245, 251, 0.98));
+  }
+  
+  .chat-composer {
+    position: relative;
+    z-index: 10;
+    background: linear-gradient(155deg, rgba(248, 252, 254, 0.98), rgba(237, 245, 251, 0.98));
+    padding-bottom: 0.5rem;
+    padding-top: 0.5rem;
+  }
+  
+  .chat-send-button {
+    position: relative;
+    z-index: 11;
   }
 }
 

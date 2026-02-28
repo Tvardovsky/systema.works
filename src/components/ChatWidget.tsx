@@ -764,7 +764,7 @@ export function ChatWidget() {
                 onKeyDown={handleKeyDown}
                 placeholder={t('placeholder')}
                 disabled={loading}
-                rows={1}
+                rows={3}
                 className="chat-input"
               />
               <button 
