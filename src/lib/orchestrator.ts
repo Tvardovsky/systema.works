@@ -1,10 +1,9 @@
 import {randomUUID} from 'crypto';
-import {generateAgencyReply, generateHandoffTerminalReply} from '@/lib/ai';
-import {extractBriefSignals} from '@/lib/brief-extractor';
+import {generateHandoffTerminalReply} from '@/lib/ai';
 import {computeLeadBriefState, isHighIntentMessage} from '@/lib/lead-brief';
 import {resolveLeadPriority} from '@/lib/lead';
 import {extractLeadSignals, getQualificationPrompt} from '@/lib/lead-signals';
-import {runDialogV2Turn} from '@/lib/dialog-v2/engine';
+import {runConversationalEngine, readConversationalRuntimeState, mergeConversationalRuntimeMetadata} from '@/lib/conversation-integration';
 import {
   appendLeadBriefRevision,
   appendConversationMessage,
@@ -134,27 +133,6 @@ type TurnExtractedSignals = {
   referralSource: string | null;
   constraints: string | null;
 };
-
-type ChatDialogRuntime = 'legacy_v1' | 'v2_deterministic' | 'v3_llm_first';
-type ChatEngineVersion = 'v1' | 'v2' | 'v3';
-
-function getChatDialogRuntime(): ChatDialogRuntime {
-  const configured = process.env.CHAT_DIALOG_MODE?.toLowerCase();
-  if (configured === 'v2_deterministic' || configured === 'v3_llm_first') {
-    return configured;
-  }
-  if (process.env.CHAT_ENGINE_VERSION?.toLowerCase() === 'v1') {
-    return 'legacy_v1';
-  }
-  return 'v3_llm_first';
-}
-
-function getChatEngineVersion(runtime: ChatDialogRuntime): ChatEngineVersion {
-  if (runtime === 'legacy_v1') {
-    return 'v1';
-  }
-  return runtime === 'v3_llm_first' ? 'v3' : 'v2';
-}
 
 function mergeAiRuntimeMetadata(
   metadata: Record<string, unknown> | null | undefined,
@@ -639,11 +617,8 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       .filter((item) => item.role === 'user' || item.role === 'assistant')
       .map((item) => ({role: item.role as 'user' | 'assistant', content: item.content}));
 
-    const chatDialogRuntime = getChatDialogRuntime();
-    const chatEngineVersion = getChatEngineVersion(chatDialogRuntime);
     const extractStartedAt = Date.now();
-    let briefExtraction: Awaited<ReturnType<typeof extractBriefSignals>> | null = null;
-    let dialogDecision: Awaited<ReturnType<typeof runDialogV2Turn>> | null = null;
+    let conversationalResult: Awaited<ReturnType<typeof runConversationalEngine>> | null = null;
     const briefContext = {
       fullName: existingBrief?.fullName ?? null,
       email: existingBrief?.email ?? null,
@@ -662,28 +637,20 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       briefStructured: existingBrief?.briefStructured ?? null,
       briefStructuredVersion: existingBrief?.briefStructuredVersion ?? null
     };
-    let extractedSignals: TurnExtractedSignals;
-    if (chatDialogRuntime !== 'legacy_v1') {
-      dialogDecision = await runDialogV2Turn({
-        locale,
-        channel: safeEvent.channel,
-        message: safeEvent.text,
-        history: syntheticHistory.slice(-14),
-        identityState: effectiveIdentityState,
-        briefContext,
-        runtimeMode: chatDialogRuntime,
-        conversationId: activeConversationId
-      });
-      extractedSignals = dialogDecision.extractedFields;
-    } else {
-      briefExtraction = await extractBriefSignals({
-        locale,
-        message: safeEvent.text,
-        history: syntheticHistory.slice(-14),
-        conversationId: activeConversationId
-      });
-      extractedSignals = briefExtraction.fields;
-    }
+
+    // Read previous conversational context from metadata
+    const previousConversationalState = readConversationalRuntimeState(conversationMetadata);
+
+    // Use new conversational engine
+    conversationalResult = await runConversationalEngine({
+      locale,
+      channel: safeEvent.channel,
+      message: safeEvent.text,
+      history: syntheticHistory.slice(-14),
+      conversationId: activeConversationId,
+      previousContext: previousConversationalState.context ?? undefined
+    });
+    let extractedSignals: TurnExtractedSignals = conversationalResult.extractedSignals;
     const extractLatencyMs = Date.now() - extractStartedAt;
     if (
       extractedSignals.fullName ||
@@ -759,11 +726,17 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       budgetHint: extractedSignals.budgetHint ?? existingBrief?.budgetHint ?? null,
       referralSource: preferRichText(existingBrief?.referralSource ?? null, extractedSignals.referralSource, 6),
       constraints: preferRichText(existingBrief?.constraints ?? null, extractedSignals.constraints, 12),
-      briefStructured: dialogDecision
-        ? (dialogDecision.structuredBrief as Record<string, unknown>)
+      briefStructured: conversationalResult
+        ? ({
+            engineVersion: 'conversational' as const,
+            context: conversationalResult.runtimeState.context,
+            threads: conversationalResult.turn.updatedThreads,
+            leadIntentScore: conversationalResult.turn.leadIntentScore,
+            handoffReady: conversationalResult.turn.handoffReady
+          } as Record<string, unknown>)
         : (existingBrief?.briefStructured ?? null),
-      briefStructuredVersion: dialogDecision
-        ? chatEngineVersion
+      briefStructuredVersion: conversationalResult
+        ? 'conversational'
         : (existingBrief?.briefStructuredVersion ?? 'v1')
     };
     const briefComputed = computeLeadBriefState(mergedBrief, {
@@ -851,32 +824,46 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
     }
 
     const replyStartedAt = Date.now();
-    let reply = dialogDecision
-      ? {
-          ...dialogDecision.response,
-          identityState: effectiveIdentityState,
-          memoryLoaded: memoryAllowed && Boolean(memory?.summary),
-          verificationHint
-        }
-      : await generateAgencyReply({
-          locale,
-          message: safeEvent.text,
-          history: syntheticHistory.slice(-14),
-          conversationId: activeConversationId,
-          identityState: effectiveIdentityState,
-          memoryLoaded: memoryAllowed && Boolean(memory?.summary),
-          verificationHint,
-          briefContext: {
-            ...briefContext,
-            ...mergedBrief,
-            missingFields: forcedMissingFields,
-            completenessScore: forcedCompletenessScore,
-            hasConversationContact: hasConversationContactAfterMerge
-          },
-          deferState: readAiRuntimeState(conversationMetadata),
-          channel: safeEvent.channel
-        });
-    const replyLatencyMs = reply.replyLatencyMs ?? (Date.now() - replyStartedAt);
+    // Generate reply from conversational engine
+    let reply = {
+      answer: conversationalResult.turn.response.acknowledgment +
+        (conversationalResult.turn.response.valueAdd ? ` ${conversationalResult.turn.response.valueAdd}` : '') +
+        (conversationalResult.turn.response.question ? ` ${conversationalResult.turn.response.question}` : ''),
+      topic: 'allowed' as const,
+      leadIntentScore: conversationalResult.turn.leadIntentScore,
+      nextQuestion: conversationalResult.turn.response.question ?? '',
+      requiresLeadCapture: false,
+      conversationStage: conversationalResult.turn.handoffReady ? 'handoff_ready' : 'briefing',
+      missingFields: conversationalResult.turn.diagnostics.activeThread === 'project_scope' && conversationalResult.turn.context.threads.project_scope.depth === 'surface'
+        ? ['service_type', 'primary_goal']
+        : conversationalResult.turn.context.threads.relationship.depth === 'surface'
+        ? ['contact']
+        : [],
+      handoffReady: conversationalResult.turn.handoffReady,
+      identityState: effectiveIdentityState,
+      memoryLoaded: memoryAllowed && Boolean(memory?.summary),
+      verificationHint,
+      dialogMode: conversationalResult.turn.context.activeThread ? 'context_continuation' : 'scope_clarify',
+      chatLocked: false,
+      chatMode: 'normal' as const,
+      llmCallsCount: 0,
+      fallbackPath: 'primary' as const,
+      validatorAdjusted: false,
+      questionsCount: conversationalResult.turn.diagnostics.questionsCount,
+      turnMode: 'progress' as const,
+      replyLatencyMs: Date.now() - replyStartedAt,
+      llmReplyDeferred: false,
+      deferReason: null as string | null,
+      gracefulFailUsed: false,
+      rephraseUsed: false,
+      templateBlockTriggered: false,
+      repetitionScore: null as number | null,
+      fallbackModelUsed: false,
+      jsonRepairUsed: false,
+      sameModelFallbackSkipped: false,
+      parseFailReason: null as string | null,
+      topicGuard: 'allowed' as const
+    };
 
     if (requiresFreshWebContact && !hasConversationContact) {
       const dedupedMissing = reply.missingFields.includes('contact')
@@ -939,6 +926,15 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       llmReplyDeferred: Boolean(reply.llmReplyDeferred),
       deferReason: (reply.deferReason ?? null) as AiRuntimeDeferReason | null
     });
+    
+    // Merge conversational runtime state if using new engine
+    if (conversationalResult) {
+      nextConversationMetadata = mergeConversationalRuntimeMetadata(
+        nextConversationMetadata,
+        conversationalResult.runtimeState
+      );
+    }
+    
     if (safeEvent.channel === 'web' && enteringHandoff && reply.handoffReady) {
       const existingLifecycle = readWebChatLifecycle(nextConversationMetadata);
       const lockedLifecycle = buildLockedLifecycle(new Date(), existingLifecycle);
@@ -985,16 +981,17 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       content: reply.answer,
       metadata: {
         dialogMode: reply.dialogMode ?? null,
-        engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
-        dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
-        dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
-        questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
-        fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
-        validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
+        engineVersion: 'conversational',
+        dialogNextSlot: null,
+        dialogTurnMode: 'progress',
+        questionsCount: conversationalResult.turn.diagnostics.questionsCount,
+        fallbackPath: 'primary',
+        validatorAdjusted: false,
         chatMode,
         chatLocked,
         cooldownUntil: cooldownUntil ?? null,
-        retryAfterSeconds: retryAfterSeconds ?? null
+        retryAfterSeconds: retryAfterSeconds ?? null,
+        leadIntentScore: conversationalResult.turn.leadIntentScore
       }
     });
 
@@ -1116,21 +1113,21 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         memoryLoaded: memoryAllowed && Boolean(memory?.summary),
         dialogMode: reply.dialogMode,
         extractorUsed: true,
-        extractorModel: dialogDecision ? 'dialog-v2' : (briefExtraction?.extractorModel ?? 'legacy'),
-        extractorDeterministicFallback: dialogDecision ? false : Boolean(briefExtraction?.deterministicFallback),
-        extractorAmbiguities: dialogDecision ? [] : (briefExtraction?.ambiguities ?? []),
+        extractorModel: 'conversational',
+        extractorDeterministicFallback: false,
+        extractorAmbiguities: [],
         extractorFilledFields: Object.entries(extractedSignals)
           .filter(([, value]) => Boolean(cleanText(value)))
           .map(([key]) => key),
-        engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
-        dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
-        dialogRepeatGuardTriggered: dialogDecision?.diagnostics.repeatGuardTriggered ?? null,
-        dialogDeferredSlot: dialogDecision?.diagnostics.deferredSlot ?? null,
-        dialogDeferTurnsRemaining: dialogDecision?.diagnostics.deferTurnsRemaining ?? null,
-        dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
-        questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
-        fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
-        validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
+        engineVersion: 'conversational',
+        dialogNextSlot: null,
+        dialogRepeatGuardTriggered: null,
+        dialogDeferredSlot: null,
+        dialogDeferTurnsRemaining: null,
+        dialogTurnMode: 'progress',
+        questionsCount: conversationalResult.turn.diagnostics.questionsCount,
+        fallbackPath: 'primary',
+        validatorAdjusted: false,
         chatLocked,
         chatMode,
         cooldownUntil: cooldownUntil ?? null,
@@ -1149,7 +1146,7 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         sameModelFallbackSkipped: reply.sameModelFallbackSkipped ?? null,
         parseFailReason: reply.parseFailReason ?? null,
         extractLatencyMs,
-        replyLatencyMs,
+        replyLatencyMs: reply.replyLatencyMs,
         turnLatencyMsTotal: Date.now() - turnStartedAt
       }
     });
@@ -1157,23 +1154,23 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
       conversationId: activeConversationId,
       channel: safeEvent.channel,
       extractorUsed: true,
-      extractorDeterministicFallback: dialogDecision ? false : Boolean(briefExtraction?.deterministicFallback),
-      engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
-      dialogTopic: dialogDecision?.diagnostics.topic ?? null,
-      dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
-      dialogRepeatGuardTriggered: dialogDecision?.diagnostics.repeatGuardTriggered ?? null,
-      dialogDeferredSlot: dialogDecision?.diagnostics.deferredSlot ?? null,
-      dialogDeferTurnsRemaining: dialogDecision?.diagnostics.deferTurnsRemaining ?? null,
-      dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
-      questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
-      fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
-      validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
+      extractorDeterministicFallback: false,
+      engineVersion: 'conversational',
+      dialogTopic: null,
+      dialogNextSlot: null,
+      dialogRepeatGuardTriggered: null,
+      dialogDeferredSlot: null,
+      dialogDeferTurnsRemaining: null,
+      dialogTurnMode: 'progress',
+      questionsCount: conversationalResult.turn.diagnostics.questionsCount,
+      fallbackPath: 'primary',
+      validatorAdjusted: false,
       llm_calls_count_per_turn: reply.llmCallsCount ?? null,
       json_repair_used: reply.jsonRepairUsed ?? null,
       same_model_fallback_skipped: reply.sameModelFallbackSkipped ?? null,
       parse_fail_reason: reply.parseFailReason ?? null,
       extract_latency_ms: extractLatencyMs,
-      reply_latency_ms: replyLatencyMs,
+      reply_latency_ms: reply.replyLatencyMs,
       turn_latency_ms_total: Date.now() - turnStartedAt
     });
     const finalMergedHistory = sessionMerged
@@ -1200,21 +1197,21 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         verificationHint,
         dialogMode: reply.dialogMode,
         extractorUsed: true,
-        extractorModel: dialogDecision ? 'dialog-v2' : (briefExtraction?.extractorModel ?? 'legacy'),
-        extractorDeterministicFallback: dialogDecision ? false : Boolean(briefExtraction?.deterministicFallback),
-        extractorAmbiguities: dialogDecision ? [] : (briefExtraction?.ambiguities ?? []),
+        extractorModel: 'conversational',
+        extractorDeterministicFallback: false,
+        extractorAmbiguities: [],
         extractorFilledFields: Object.entries(extractedSignals)
           .filter(([, value]) => Boolean(cleanText(value)))
           .map(([key]) => key),
-        engineVersion: dialogDecision?.diagnostics.engineVersion ?? chatEngineVersion,
-        dialogNextSlot: dialogDecision?.diagnostics.nextSlot ?? null,
-        dialogRepeatGuardTriggered: dialogDecision?.diagnostics.repeatGuardTriggered ?? null,
-        dialogDeferredSlot: dialogDecision?.diagnostics.deferredSlot ?? null,
-        dialogDeferTurnsRemaining: dialogDecision?.diagnostics.deferTurnsRemaining ?? null,
-        dialogTurnMode: dialogDecision?.diagnostics.turnMode ?? null,
-        questionsCount: dialogDecision?.diagnostics.questionsCount ?? null,
-        fallbackPath: dialogDecision?.diagnostics.fallbackPath ?? null,
-        validatorAdjusted: dialogDecision?.diagnostics.validatorAdjusted ?? null,
+        engineVersion: 'conversational',
+        dialogNextSlot: null,
+        dialogRepeatGuardTriggered: null,
+        dialogDeferredSlot: null,
+        dialogDeferTurnsRemaining: null,
+        dialogTurnMode: 'progress',
+        questionsCount: conversationalResult.turn.diagnostics.questionsCount,
+        fallbackPath: 'primary',
+        validatorAdjusted: false,
         chatLocked,
         chatMode,
         cooldownUntil: cooldownUntil ?? null,
@@ -1233,7 +1230,7 @@ export async function handleInboundEvent(event: InboundEvent): Promise<OutboundA
         sameModelFallbackSkipped: reply.sameModelFallbackSkipped ?? null,
         parseFailReason: reply.parseFailReason ?? null,
         extractLatencyMs,
-        replyLatencyMs,
+        replyLatencyMs: reply.replyLatencyMs,
         turnLatencyMsTotal: Date.now() - turnStartedAt,
         sessionMerged,
         mergedFromConversationId: mergedFromConversationId ?? null,

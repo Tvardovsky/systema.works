@@ -44,3 +44,6 @@ next-env.d.ts
 
 .runtime/
 !\.env.example
+
+QWEN.md
+progress.txt

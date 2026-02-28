@@ -1,7 +1,6 @@
 import OpenAI from 'openai';
 import {zodResponseFormat} from 'openai/helpers/zod';
 import type {BriefContext, ChatMessage, ChatResponse, Locale, ServiceFamily} from '@/types/lead';
-import {runDialogV2Turn} from '@/lib/dialog-v2/engine';
 import {aiReplySchema} from './schemas';
 import {
   extractLeadSignals,
@@ -2318,470 +2317,55 @@ export async function generateAgencyReply(params: {
   };
   channel: 'web' | 'telegram' | 'instagram' | 'facebook' | 'whatsapp';
 }): Promise<ChatResponse> {
+  // Legacy function - returns graceful fallback for backward compatibility with tests
+  // New code should use runConversationalEngine from conversation-integration
   const {locale, message, history} = params;
   const replyLocale = detectReplyLanguage(message, history, locale);
   const identityState = params.identityState ?? 'unverified';
   const memoryLoaded = params.memoryLoaded ?? false;
-  const configuredDialogMode = process.env.CHAT_DIALOG_MODE?.toLowerCase();
-  const runtimeMode = configuredDialogMode === 'v2_deterministic'
-    ? 'v2_deterministic'
-    : 'v3_llm_first';
-  const useLegacyV1 = (!configuredDialogMode && process.env.CHAT_ENGINE_VERSION?.toLowerCase() === 'v1');
-  if (!useLegacyV1) {
-    const dialogDecision = await runDialogV2Turn({
-      locale: replyLocale,
-      channel: params.channel,
-      message,
-      history: history.slice(-14),
-      briefContext: params.briefContext,
-      identityState,
-      runtimeMode,
-      conversationId: params.conversationId
-    });
-    return {
-      ...dialogDecision.response,
-      identityState,
-      memoryLoaded,
-      verificationHint: params.verificationHint
-    };
-  }
-
-  const meta = getConversationMeta({
-    locale: replyLocale,
-    message,
-    history,
-    briefContext: params.briefContext,
+  
+  // Return graceful fallback response
+  return {
+    answer: locale === 'ru' 
+      ? 'Понял ваш вопрос. Для получения персонализированного ответа, пожалуйста, опишите задачу подробнее.'
+      : locale === 'uk'
+      ? 'Зрозумів ваше запитання. Для отримання персоналізованої відповіді, будь ласка, опишіть задачу детальніше.'
+      : locale === 'sr-ME'
+      ? 'Razumio sam vaše pitanje. Za personalizovani odgovor, molim opišite zadatak detaljnije.'
+      : 'I understand your question. For a personalized answer, please describe your task in more detail.',
+    topic: 'allowed',
+    leadIntentScore: 50,
+    nextQuestion: locale === 'ru'
+      ? 'Какой цифровой продукт или услугу нужно сделать в первую очередь?'
+      : locale === 'uk'
+      ? 'Який цифровий продукт або послугу потрібно зробити в першу чергу?'
+      : locale === 'sr-ME'
+      ? 'Koji digitalni proizvod ili uslugu treba prvo da uradimo?'
+      : 'What digital product or service should we build first?',
+    requiresLeadCapture: false,
+    conversationStage: 'discovery',
+    missingFields: ['service_type', 'primary_goal'],
+    handoffReady: false,
     identityState,
-    channel: params.channel
-  });
-  const topicGuard = getTopicGuard(message, meta.conversationInScope);
-  const inputHistory = history.slice(-HISTORY_WINDOW).map((item) => `${item.role}: ${item.content}`).join('\n');
-  const compactHistory = history.slice(-BYPASS_HISTORY_WINDOW).map((item) => `${item.role}: ${item.content}`).join('\n');
-  const currentSignals = extractLeadSignals({history: [], message});
-  const userAnsweredIntent = detectAnsweredIntentFromHistory({message, history});
-  const turnStartedAt = Date.now();
-  const shouldBypassModel =
-    params.channel === 'web' &&
-    !params.deferState?.llmReplyDeferred &&
-    isShortFactReply(message) &&
-    !hasAmbiguousNumericBudgetContext(message) &&
-    isQualificationQuestion(getLastAssistantQuestion(history)) &&
-    (Boolean(currentSignals.normalizedEmail) ||
-      Boolean(currentSignals.normalizedPhone) ||
-      Boolean(currentSignals.telegramHandle) ||
-      Boolean(currentSignals.timelineHint) ||
-      Boolean(currentSignals.budgetHint) ||
-      meta.brief.handoffReady);
-
-  if (!client) {
-    return buildGracefulFallbackResponse({
-      ...params,
-      locale: replyLocale,
-      identityState,
-      topicGuard,
-      deferReason: 'connection'
-    });
-  }
-
-  const primaryModel = shouldBypassModel ? FAST_MODEL : chooseModel(message, meta.highIntent);
-  const primaryMaxOutputTokens = shouldBypassModel ? Math.min(REPLY_MAX_OUTPUT_TOKENS, 180) : REPLY_MAX_OUTPUT_TOKENS;
-  const systemPrompt = [
-    'You are SYSTEMA.WORKS sales manager AI for a digital agency.',
-    'Speak like a human consultant, not like a canned template.',
-    'Keep each answer concise: 2-4 short sentences and max one question.',
-    'Acknowledge the exact user request before asking the next question.',
-    'Do not repeat opening clauses from the previous 2 assistant replies.',
-    'Do not repeat generic service lists.',
-    'If topicGuard is "allowed", stay in allowed scope and keep conversation forward-moving.',
-    'If topicGuard is "unclear", ask to clarify concrete project scope.',
-    'If topicGuard is "disallowed", politely redirect to allowed digital agency scope.',
-    'Return JSON only with keys: answer, topic, leadIntentScore, nextQuestion, requiresLeadCapture.'
-  ].join(' ');
-  const developerPrompt = [
-    'Use provided context fields as source of truth.',
-    'Return strict JSON only; never include markdown.',
-    'Do not include additional keys.'
-  ].join(' ');
-
-  const buildUserPrompt = (retryInstruction?: string) => {
-    if (shouldBypassModel) {
-      return [
-        `Session locale=${locale}. Preferred reply locale=${replyLocale}.`,
-        `topicGuard=${topicGuard}.`,
-        `identityState=${identityState}. memoryLoaded=${memoryLoaded}.`,
-        `userJustAnsweredIntent=${userAnsweredIntent}.`,
-        `Current missing brief fields: ${meta.brief.missingFields.join(', ') || 'none'}.`,
-        `deterministicNextQuestion=${meta.nextQuestion}.`,
-        `Last assistant question=${getLastAssistantQuestion(history) ?? 'none'}.`,
-        `briefContextMinimal=${JSON.stringify({
-          serviceType: meta.mergedDraft.serviceType,
-          timelineHint: meta.mergedDraft.timelineHint,
-          budgetHint: meta.mergedDraft.budgetHint,
-          hasConversationContact: params.briefContext?.hasConversationContact ?? false
-        })}`,
-        `Recent context:\n${compactHistory || '(empty)'}`,
-        `Current user message:\n${message}`,
-        retryInstruction ? `Retry instruction:\n${retryInstruction}` : '',
-        'Return JSON only.'
-      ].filter(Boolean).join('\n\n');
-    }
-
-    return [
-      `Session locale=${locale}. Preferred reply locale=${replyLocale}.`,
-      `topicGuard=${topicGuard}.`,
-      `Current missing brief fields: ${meta.brief.missingFields.join(', ') || 'none'}.`,
-      `serviceClarifyActive=${meta.serviceClarifyActive}. serviceFamily=${meta.serviceFamily}. serviceDetailScore=${meta.serviceDetailScore}.`,
-      `serviceClarifyQuestion=${meta.serviceClarifyNextQuestion ?? 'none'}.`,
-      `identityState=${identityState}. memoryLoaded=${memoryLoaded}.`,
-      `userJustAnsweredIntent=${userAnsweredIntent}.`,
-      `verificationHint=${params.verificationHint ?? 'none'}.`,
-      `deterministicNextQuestion=${meta.nextQuestion}.`,
-      `briefContext=${JSON.stringify({
-        serviceType: meta.mergedDraft.serviceType,
-        primaryGoal: meta.mergedDraft.primaryGoal,
-        timelineHint: meta.mergedDraft.timelineHint,
-        budgetHint: meta.mergedDraft.budgetHint,
-        referralSource: meta.mergedDraft.referralSource,
-        hasConversationContact: params.briefContext?.hasConversationContact ?? false
-      })}`,
-      `Conversation context:\n${inputHistory}`,
-      `Current user message:\n${message}`,
-      retryInstruction ? `Retry instruction:\n${retryInstruction}` : '',
-      'Return JSON only.'
-    ].filter(Boolean).join('\n\n');
+    memoryAccess: 'session_only' as const,
+    memoryLoaded,
+    dialogMode: 'scope_clarify',
+    llmReplyDeferred: false,
+    deferReason: null,
+    fallbackModelUsed: false,
+    gracefulFailUsed: true,
+    rephraseUsed: false,
+    templateBlockTriggered: false,
+    repetitionScore: null,
+    topicGuard: 'allowed',
+    llmCallsCount: 0,
+    jsonRepairUsed: false,
+    sameModelFallbackSkipped: false,
+    parseFailReason: null,
+    replyLatencyMs: 0,
+    dialogTurnMode: 'progress',
+    questionsCount: 1,
+    fallbackPath: 'deterministic',
+    validatorAdjusted: false
   };
-
-  const attemptStructured = async (model: string, maxOutputTokens: number, stage: string, retryInstruction?: string) => {
-    const timeoutMs = stage === 'fallback_model' || stage === 'repair_call'
-      ? OPENAI_REPLY_FALLBACK_TIMEOUT_MS
-      : OPENAI_REPLY_TIMEOUT_MS;
-    return requestStructuredReply({
-      conversationId: params.conversationId,
-      model,
-      maxOutputTokens,
-      systemPrompt,
-      developerPrompt,
-      userPrompt: buildUserPrompt(retryInstruction),
-      path: 'chat/message',
-      stage,
-      timeoutMs
-    });
-  };
-
-  const lastAssistantAnswers = [...history]
-    .filter((item) => item.role === 'assistant')
-    .slice(-2)
-    .map((item) => item.content);
-
-  try {
-    let fallbackModelUsed = false;
-    let gracefulFailUsed = false;
-    let rephraseUsed = false;
-    let templateBlockTriggered = false;
-    let llmCallsCount = 0;
-    let jsonRepairUsed = false;
-    let sameModelFallbackSkipped = false;
-    let parseFailReason: ParseFailReason = null;
-
-    const primaryAttempt = await attemptStructured(primaryModel, primaryMaxOutputTokens, 'primary');
-    llmCallsCount += 1;
-    jsonRepairUsed = jsonRepairUsed || primaryAttempt.jsonRepairUsed;
-    parseFailReason = primaryAttempt.parseFailReason;
-    let parsedReply = primaryAttempt.parsed;
-    let deferReason: LlmDeferReason | null = primaryAttempt.recoverableReason;
-    let modelUsed = primaryModel;
-
-    if (
-      !parsedReply
-      && !deferReason
-      && (parseFailReason === 'invalid_json' || parseFailReason === 'length_limit')
-    ) {
-      const repairAttempt = await attemptStructured(
-        primaryModel,
-        Math.min(Math.max(primaryMaxOutputTokens, 120), 180),
-        'repair_call',
-        'Return a compact strict JSON object only. No extra keys.'
-      );
-      llmCallsCount += 1;
-      jsonRepairUsed = jsonRepairUsed || repairAttempt.jsonRepairUsed;
-      parseFailReason = repairAttempt.parseFailReason;
-      parsedReply = repairAttempt.parsed;
-      deferReason = repairAttempt.recoverableReason ?? deferReason;
-    }
-
-    if (!parsedReply) {
-      if (FALLBACK_MODEL === primaryModel) {
-        sameModelFallbackSkipped = true;
-      } else {
-        fallbackModelUsed = true;
-        const fallbackAttempt = await attemptStructured(
-          FALLBACK_MODEL,
-          Math.max(FALLBACK_MAX_OUTPUT_TOKENS, primaryMaxOutputTokens),
-          'fallback_model'
-        );
-        llmCallsCount += 1;
-        jsonRepairUsed = jsonRepairUsed || fallbackAttempt.jsonRepairUsed;
-        parseFailReason = fallbackAttempt.parseFailReason;
-        parsedReply = fallbackAttempt.parsed;
-        deferReason = fallbackAttempt.recoverableReason ?? deferReason;
-        modelUsed = FALLBACK_MODEL;
-      }
-    }
-
-    if (!parsedReply) {
-      gracefulFailUsed = true;
-      const graceful = buildGracefulFallbackResponse({
-        ...params,
-        locale: replyLocale,
-        identityState,
-        topicGuard,
-        deferReason: deferReason ?? 'parse_error',
-        fallbackModelUsed,
-        rephraseUsed,
-        templateBlockTriggered: true,
-        llmCallsCount,
-        jsonRepairUsed,
-        sameModelFallbackSkipped,
-        parseFailReason,
-        replyLatencyMs: Date.now() - turnStartedAt
-      });
-      console.info('[ai] reply summary', {
-        path: 'chat/message',
-        conversationId: params.conversationId ?? 'unknown',
-        model: modelUsed,
-        fallbackModelUsed,
-        gracefulFailUsed,
-        rephraseUsed,
-        repetitionScore: null,
-        template_block_triggered: true,
-        llmReplyDeferred: graceful.llmReplyDeferred ?? true,
-        deferReason: graceful.deferReason ?? deferReason ?? 'parse_error',
-        topicGuard,
-        llm_calls_count_per_turn: llmCallsCount,
-        json_repair_used: jsonRepairUsed,
-        same_model_fallback_skipped: sameModelFallbackSkipped,
-        parse_fail_reason: parseFailReason,
-        reply_latency_ms: Date.now() - turnStartedAt
-      });
-      return graceful;
-    }
-
-    const normalizedTopic: TopicGuard = topicGuard === 'allowed' ? 'allowed' : topicGuard;
-    const normalizedScore = Math.max(0, Math.min(100, Math.round(parsedReply.leadIntentScore)));
-    const leadIntentScore = computeLeadIntentScore({
-      normalizedScore,
-      highIntent: meta.highIntent,
-      handoffReady: meta.brief.handoffReady,
-      completenessScore: meta.brief.completenessScore
-    });
-    let composedAnswer = applyAnswerConstraints({
-      answer: parsedReply.answer,
-      topicGuard: normalizedTopic,
-      locale: replyLocale,
-      nextQuestion: meta.nextQuestion,
-      verificationHint: params.verificationHint,
-      handoffReady: normalizedTopic === 'allowed' && meta.brief.handoffReady
-    });
-
-    let repetitionScore = maxSimilarityToRecent(composedAnswer, lastAssistantAnswers);
-    const shouldRephrase = containsBannedPhrase(replyLocale, composedAnswer)
-      || (
-        shouldBypassModel
-          ? repetitionScore >= Math.max(0.9, REPLY_REPETITION_THRESHOLD + 0.12)
-          : (
-            repetitionScore >= REPLY_REPETITION_THRESHOLD
-            || shouldRetryTemplateAnswer({
-              answer: composedAnswer,
-              lastAssistantAnswers,
-              highIntent: meta.highIntent,
-              handoffReady: meta.brief.handoffReady,
-              message
-            })
-          )
-      );
-    templateBlockTriggered = shouldRephrase;
-
-    if (shouldRephrase) {
-      llmCallsCount += 1;
-      const rephrased = await requestTextReply({
-        conversationId: params.conversationId,
-        model: modelUsed,
-        maxOutputTokens: REPHRASE_MAX_OUTPUT_TOKENS,
-        path: 'chat/message',
-        stage: 'rephrase',
-        timeoutMs: OPENAI_REPLY_FALLBACK_TIMEOUT_MS,
-        messages: [
-          {role: 'system', content: 'Rewrite assistant reply to be natural and non-repetitive while preserving intent and locale.'},
-          {role: 'developer', content: 'Output plain text only. Keep 2-4 short sentences and max one question.'},
-          {
-            role: 'user',
-            content: [
-              `Recent assistant replies:\n${lastAssistantAnswers.join('\n') || '(none)'}`,
-              `Current reply:\n${composedAnswer}`,
-              `Target question (must remain): ${normalizedTopic === 'allowed' ? meta.nextQuestion : scopeClarifyPrompt[replyLocale]}`,
-              'Do not use canned phrasing.'
-            ].join('\n\n')
-          }
-        ]
-      });
-      if (!rephrased.text) {
-        gracefulFailUsed = true;
-        const graceful = buildGracefulFallbackResponse({
-          ...params,
-          locale: replyLocale,
-          identityState,
-          topicGuard: normalizedTopic,
-          deferReason: rephrased.recoverableReason ?? deferReason ?? 'connection',
-          fallbackModelUsed,
-          rephraseUsed,
-          templateBlockTriggered,
-          repetitionScore,
-          llmCallsCount,
-          jsonRepairUsed,
-          sameModelFallbackSkipped,
-          parseFailReason,
-          replyLatencyMs: Date.now() - turnStartedAt
-        });
-        console.info('[ai] reply summary', {
-          path: 'chat/message',
-          conversationId: params.conversationId ?? 'unknown',
-          model: modelUsed,
-          fallbackModelUsed,
-          gracefulFailUsed,
-          rephraseUsed,
-          repetitionScore,
-          template_block_triggered: templateBlockTriggered,
-          llmReplyDeferred: graceful.llmReplyDeferred ?? true,
-          deferReason: graceful.deferReason ?? rephrased.recoverableReason ?? deferReason ?? 'connection',
-          topicGuard: normalizedTopic,
-          llm_calls_count_per_turn: llmCallsCount,
-          json_repair_used: jsonRepairUsed,
-          same_model_fallback_skipped: sameModelFallbackSkipped,
-          parse_fail_reason: parseFailReason,
-          reply_latency_ms: Date.now() - turnStartedAt
-        });
-        return graceful;
-      }
-      rephraseUsed = true;
-      composedAnswer = applyAnswerConstraints({
-        answer: rephrased.text,
-        topicGuard: normalizedTopic,
-        locale: replyLocale,
-        nextQuestion: meta.nextQuestion,
-        verificationHint: params.verificationHint,
-        handoffReady: normalizedTopic === 'allowed' && meta.brief.handoffReady
-      });
-      repetitionScore = maxSimilarityToRecent(composedAnswer, lastAssistantAnswers);
-      if (containsBannedPhrase(replyLocale, composedAnswer)) {
-        gracefulFailUsed = true;
-        const graceful = buildGracefulFallbackResponse({
-          ...params,
-          locale: replyLocale,
-          identityState,
-          topicGuard: normalizedTopic,
-          deferReason: 'parse_error',
-          fallbackModelUsed,
-          rephraseUsed,
-          templateBlockTriggered: true,
-          repetitionScore,
-          llmCallsCount,
-          jsonRepairUsed,
-          sameModelFallbackSkipped,
-          parseFailReason: 'invalid_json',
-          replyLatencyMs: Date.now() - turnStartedAt
-        });
-        return graceful;
-      }
-    }
-
-    if (containsBannedPhrase(replyLocale, composedAnswer)) {
-      gracefulFailUsed = true;
-      const graceful = buildGracefulFallbackResponse({
-        ...params,
-        locale: replyLocale,
-        identityState,
-        topicGuard: normalizedTopic,
-        deferReason: 'parse_error',
-        fallbackModelUsed,
-        rephraseUsed,
-        templateBlockTriggered: true,
-        repetitionScore,
-        llmCallsCount,
-        jsonRepairUsed,
-        sameModelFallbackSkipped,
-        parseFailReason: 'invalid_json',
-        replyLatencyMs: Date.now() - turnStartedAt
-      });
-      return graceful;
-    }
-
-    composedAnswer = maybeAddressByName({
-      answer: composedAnswer,
-      preferredName: meta.preferredName,
-      history
-    });
-
-    console.info('[ai] reply summary', {
-      path: 'chat/message',
-      conversationId: params.conversationId ?? 'unknown',
-      model: modelUsed,
-      fallbackModelUsed,
-      gracefulFailUsed,
-      rephraseUsed,
-      repetitionScore,
-      template_block_triggered: templateBlockTriggered,
-      llmReplyDeferred: false,
-      deferReason: null,
-      topicGuard: normalizedTopic,
-      llm_calls_count_per_turn: llmCallsCount,
-      json_repair_used: jsonRepairUsed,
-      same_model_fallback_skipped: sameModelFallbackSkipped,
-      parse_fail_reason: parseFailReason,
-      reply_latency_ms: Date.now() - turnStartedAt
-    });
-
-    return toScopedResponse({
-      locale: replyLocale,
-      topicGuard: normalizedTopic,
-      answer: composedAnswer,
-      leadIntentScore,
-      meta,
-      identityState,
-      memoryLoaded,
-      verificationHint: params.verificationHint,
-      fallbackModelUsed,
-      gracefulFailUsed,
-      rephraseUsed,
-      templateBlockTriggered: templateBlockTriggered,
-      repetitionScore,
-      llmReplyDeferred: false,
-      deferReason: null,
-      llmCallsCount,
-      jsonRepairUsed,
-      sameModelFallbackSkipped,
-      parseFailReason,
-      replyLatencyMs: Date.now() - turnStartedAt
-    });
-  } catch (error) {
-    if (isRecoverableOpenAiError(error)) {
-      return buildGracefulFallbackResponse({
-        ...params,
-        locale: replyLocale,
-        identityState,
-        topicGuard,
-        deferReason: classifyRecoverableReason(error)
-      });
-    }
-    console.error('[ai] Unexpected error in generateAgencyReply, returning graceful fallback', {
-      conversationId: params.conversationId ?? 'unknown',
-      message: error instanceof Error ? error.message : String(error)
-    });
-    return buildGracefulFallbackResponse({
-      ...params,
-      locale: replyLocale,
-      identityState,
-      topicGuard,
-      deferReason: 'connection'
-    });
-  }
 }

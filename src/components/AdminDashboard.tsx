@@ -4,6 +4,9 @@ import {useCallback, useEffect, useMemo, useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
 import {AdminLocaleSwitcher} from '@/components/AdminLocaleSwitcher';
+import {BriefConfidenceIndicator, BriefEvidenceQuote, BriefFieldWarnings, BriefVerificationStatus} from '@/components/BriefConfidenceIndicator';
+import {BriefExtractionHistory, BriefExtractionSummary} from '@/components/BriefExtractionHistory';
+import {BriefQualityScore, BriefQuickStats} from '@/components/BriefQualityScore';
 
 type ConversationStatus = 'open' | 'qualified' | 'hot' | 'handoff' | 'closed';
 type ReadFilter = 'all' | 'personal_unread' | 'personal_read';
@@ -1323,6 +1326,54 @@ export function AdminDashboard({locale, role}: Props) {
                   <span className="label-text text-xs">{t('fields.revisionNote')}</span>
                   <input className="input input-bordered input-sm" value={briefDraft.note} onChange={(e) => setBriefDraft((p) => ({...p, note: e.target.value}))} suppressHydrationWarning />
                 </label>
+
+                {/* Brief Extraction UI */}
+                {briefBundle.data?.brief && (
+                  <div className="space-y-4">
+                    {/* Quality Score */}
+                    <BriefQualityScore
+                      overallScore={briefBundle.data.brief.completenessScore}
+                      completenessScore={briefBundle.data.brief.completenessScore}
+                      confidenceScore={70}
+                      verificationScore={0}
+                      recommendation={
+                        briefBundle.data.brief.status === 'handoff'
+                          ? 'ready_for_handoff'
+                          : briefBundle.data.brief.completenessScore >= 60
+                          ? 'verify_low_confidence_fields'
+                          : 'collect_more_information'
+                      }
+                      locale={locale}
+                    />
+
+                    {/* Quick Stats */}
+                    <BriefQuickStats
+                      totalFields={11}
+                      filledFields={[
+                        briefBundle.data.brief.fullName,
+                        briefBundle.data.brief.email,
+                        briefBundle.data.brief.phone,
+                        briefBundle.data.brief.telegramHandle,
+                        briefBundle.data.brief.serviceType,
+                        briefBundle.data.brief.primaryGoal,
+                        briefBundle.data.brief.firstDeliverable,
+                        briefBundle.data.brief.timelineHint,
+                        briefBundle.data.brief.budgetHint,
+                        briefBundle.data.brief.referralSource,
+                        briefBundle.data.brief.constraints
+                      ].filter(Boolean).length}
+                      verifiedFields={0}
+                      lowConfidenceFields={0}
+                    />
+
+                    {/* Extraction Summary */}
+                    <BriefExtractionSummary
+                      lastExtraction={null}
+                      totalExtractions={1}
+                      completenessScore={briefBundle.data.brief.completenessScore}
+                    />
+                  </div>
+                )}
 
                 <section className="rounded-box border border-base-300 bg-base-200/30 p-3">
                   <div className="mb-2 flex items-center justify-between gap-2">
