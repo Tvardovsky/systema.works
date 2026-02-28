@@ -18,8 +18,9 @@ import type {BriefExtractionResult, MergedBrief} from './brief-types';
 /**
  * Brief extraction configuration.
  */
-const BRIEF_EXTRACTION_INTERVAL = 3; // Extract every 3 turns
+const BRIEF_EXTRACTION_INTERVAL = 2; // Extract every 2+ turns
 const BRIEF_EXTRACTION_MIN_CONFIDENCE = 0.5; // Only store fields with confidence >= 50%
+const MIN_TURN_FOR_EXTRACTION = 2; // Start extraction from turn 2
 
 /**
  * Get variation seed for response diversity.
@@ -144,6 +145,97 @@ function handleHandoff(
 }
 
 /**
+ * Handle immediate handoff - contact captured, end conversation.
+ */
+function handleImmediateHandoff(
+  locale: Locale,
+  context: ConversationContext,
+  message: string,
+  turnNumber: number
+): ConversationalTurn {
+  // First ask if we can help with anything else
+  const canHelpQuestion = locale === 'ru'
+    ? 'Можем ли мы еще чем-то помочь перед передачей менеджеру?'
+    : locale === 'uk'
+    ? 'Чи можемо ми ще чимось допомогти перед передачею менеджеру?'
+    : locale === 'sr-ME'
+    ? 'Možemo li još nečim pomoći prije proslijeđivanja menadžeru?'
+    : 'Can we help you with anything else before connecting you with a manager?';
+
+  const finalMessage = locale === 'ru'
+    ? `Спасибо! Менеджер с вами свяжется в ближайшее время. ${canHelpQuestion}`
+    : locale === 'uk'
+    ? `Дякуємо! Менеджер зв'яжеться з вами найближчим часом. ${canHelpQuestion}`
+    : locale === 'sr-ME'
+    ? `Hvala! Menadžer će vas kontaktirati uskoro. ${canHelpQuestion}`
+    : `Thanks! A manager will contact you soon. ${canHelpQuestion}`;
+
+  const updatedContext = markHandoffComplete(context, turnNumber);
+
+  return {
+    response: {
+      acknowledgment: locale === 'ru' ? 'Понял!' : locale === 'uk' ? 'Зрозумів!' : locale === 'sr-ME' ? 'Razumio sam!' : 'Got it!',
+      valueAdd: finalMessage,
+      explorationInvite: undefined,
+      question: undefined,
+      shouldAskQuestion: false,
+      nextThread: 'handoff',
+      handoffSignal: true
+    },
+    context: updatedContext,
+    updatedThreads: updatedContext.threads,
+    handoffReady: true,
+    leadIntentScore: calculateLeadIntentScore(updatedContext),
+    diagnostics: {
+      intentType: 'handoff_request',
+      sentiment: context.userIntent.sentiment,
+      activeThread: 'handoff',
+      questionsCount: 0
+    }
+  };
+}
+
+/**
+ * Handle contact collection - first handoff request.
+ */
+function handleContactCollection(
+  locale: Locale,
+  context: ConversationContext,
+  message: string,
+  turnNumber: number
+): ConversationalTurn {
+  const contactRequest = locale === 'ru'
+    ? 'Конечно! Чтобы менеджер мог связаться, оставьте ваш контакт (email или телефон).'
+    : locale === 'uk'
+    ? 'Звичайно! Щоб менеджер міг зв\'язатися, залиште ваш контакт (email або телефон).'
+    : locale === 'sr-ME'
+    ? 'Naravno! Da bi menadžer mogao da vas kontaktira, ostavite svoj kontakt (email ili telefon).'
+    : 'Of course! To connect you with a manager, please leave your contact (email or phone).';
+
+  return {
+    response: {
+      acknowledgment: locale === 'ru' ? 'Понял!' : locale === 'uk' ? 'Зрозумів!' : locale === 'sr-ME' ? 'Razumio sam!' : 'Got it!',
+      valueAdd: contactRequest,
+      explorationInvite: undefined,
+      question: undefined,
+      shouldAskQuestion: false,
+      nextThread: 'relationship',
+      handoffSignal: false
+    },
+    context,
+    updatedThreads: context.threads,
+    handoffReady: false,
+    leadIntentScore: calculateLeadIntentScore(context),
+    diagnostics: {
+      intentType: 'handoff_request',
+      sentiment: context.userIntent.sentiment,
+      activeThread: 'relationship',
+      questionsCount: 0
+    }
+  };
+}
+
+/**
  * Main conversational turn handler.
  */
 export async function runConversationalTurn(input: ConversationalInput): Promise<ConversationalTurn> {
@@ -166,8 +258,32 @@ export async function runConversationalTurn(input: ConversationalInput): Promise
     return handleScopeClarification(locale, message, context);
   }
 
-  // Check for handoff signals
-  const handoffSignal = detectHandoffSignal({context, message});
+  // Check for handoff signals with contact info
+  const contactCaptured = !!(
+    context.threads.relationship.entities.email ||
+    context.threads.relationship.entities.phone ||
+    context.threads.relationship.entities.telegramHandle
+  );
+  
+  const handoffRequestCount = context.threads.handoff.lastActiveAt || 0;
+  
+  const handoffSignal = detectHandoffSignal({
+    context,
+    message,
+    handoffRequestCount,
+    contactCaptured
+  });
+  
+  // Handle immediate handoff (contact captured OR 2nd+ request)
+  if (handoffSignal.shouldEndConversation) {
+    return handleImmediateHandoff(locale, context, message, turnNumber);
+  }
+  
+  // Handle contact collection (first handoff request)
+  if (handoffSignal.shouldAskForContact) {
+    return handleContactCollection(locale, context, message, turnNumber);
+  }
+  
   if (handoffSignal.isReady || context.userIntent.type === 'handoff_request') {
     return handleHandoff(locale, context, message, turnNumber);
   }
@@ -221,14 +337,34 @@ export async function runConversationalTurn(input: ConversationalInput): Promise
     activeThread: composedResponse.nextThread ?? activeThread
   };
 
-  // Extract brief periodically (every N turns)
+  // Calculate lead intent scores for comparison
+  const previousLeadScore = previousContext ? calculateLeadIntentScore(previousContext) : 0;
+  const currentLeadScore = calculateLeadIntentScore(updatedContext);
+  const leadScoreIncreased = currentLeadScore > previousLeadScore;
+
+  // Get last extraction turn from context metadata
+  const lastExtractionTurn = previousContext?.threads.handoff.lastActiveAt ?? 0;
+
+  // Extract brief when:
+  // 1. Every N turns (starting from turn 2)
+  // 2. Lead score increased significantly (10+ points)
+  // 3. User shows commitment signals
   let briefExtractionResult: BriefExtractionResult | null = null;
   let briefExtractionInfo: ConversationalTurn['briefExtraction'] = undefined;
-  
-  if (shouldExtractBrief({currentTurn: turnNumber, extractionInterval: BRIEF_EXTRACTION_INTERVAL})) {
+
+  const shouldExtract = shouldExtractBrief({
+    currentTurn: turnNumber,
+    lastExtractionTurn,
+    extractionInterval: BRIEF_EXTRACTION_INTERVAL,
+    leadScoreIncreased,
+    previousLeadScore,
+    currentLeadScore
+  });
+
+  if (shouldExtract) {
     // Build existing brief from context for merging
     const existingBriefFromContext: MergedBrief | null = null; // Will be passed from API layer
-    
+
     briefExtractionResult = await extractBriefFromConversation({
       locale,
       message,
@@ -237,11 +373,11 @@ export async function runConversationalTurn(input: ConversationalInput): Promise
       currentTurn: turnNumber,
       existingBrief: existingBriefFromContext
     });
-    
+
     // Get fields that were updated (have value and confidence >= threshold)
     const fieldsUpdated: string[] = [];
     const fieldKeys = ['fullName', 'email', 'phone', 'telegramHandle', 'serviceType', 'primaryGoal', 'firstDeliverable', 'timelineHint', 'budgetHint', 'referralSource', 'constraints'] as const;
-    
+
     for (const field of fieldKeys) {
       const value = briefExtractionResult.mergedBrief[field];
       const confidence = briefExtractionResult.mergedBrief.fieldConfidence[field] ?? 0;
@@ -249,13 +385,14 @@ export async function runConversationalTurn(input: ConversationalInput): Promise
         fieldsUpdated.push(field);
       }
     }
-    
+
     briefExtractionInfo = {
       ran: true,
       turn: turnNumber,
       fieldsUpdated,
       completenessScore: briefExtractionResult.completeness.score,
-      readyForHandoff: briefExtractionResult.completeness.readyForHandoff
+      readyForHandoff: briefExtractionResult.completeness.readyForHandoff,
+      leadScoreChange: leadScoreIncreased ? currentLeadScore - previousLeadScore : 0
     };
   }
 

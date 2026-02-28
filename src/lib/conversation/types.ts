@@ -116,6 +116,7 @@ export interface ConversationalTurn {
     fieldsUpdated: string[];
     completenessScore: number;
     readyForHandoff: boolean;
+    leadScoreChange?: number;
   };
 }
 
@@ -139,6 +140,9 @@ export interface HandoffSignal {
   confidence: number;
   signals: string[]; // What triggered handoff readiness
   missingInfo: string[]; // What info still needed for smooth handoff
+  action?: 'continue' | 'collect_contact' | 'immediate_handoff';
+  shouldAskForContact?: boolean;
+  shouldEndConversation?: boolean;
 }
 
 /**

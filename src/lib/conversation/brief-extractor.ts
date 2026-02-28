@@ -29,6 +29,7 @@ const EXTRACT_FALLBACK_MODEL = process.env.OPENAI_EXTRACT_FALLBACK_MODEL ?? 'gpt
 const EXTRACT_MAX_TOKENS = Math.max(500, Math.min(2000, Number.parseInt(process.env.OPENAI_EXTRACT_MAX_TOKENS ?? '1000', 10) || 1000));
 const EXTRACT_TIMEOUT_MS = Math.max(5000, Math.min(30000, Number.parseInt(process.env.OPENAI_EXTRACT_TIMEOUT_MS ?? '10000', 10) || 10000));
 const OPENAI_MAX_RETRIES = Math.max(0, Number.parseInt(process.env.OPENAI_MAX_RETRIES ?? '1', 10) || 1);
+const MIN_TURN_FOR_EXTRACTION = 2; // Start extraction from turn 2
 
 /**
  * OpenAI client for brief extraction.
@@ -519,16 +520,37 @@ export function shouldExtractBrief(params: {
   currentTurn: number;
   lastExtractionTurn?: number;
   extractionInterval?: number;
+  leadScoreIncreased?: boolean;
+  previousLeadScore?: number;
+  currentLeadScore?: number;
 }): boolean {
-  const {currentTurn, lastExtractionTurn = 0, extractionInterval = 3} = params;
+  const {
+    currentTurn,
+    lastExtractionTurn = 0,
+    extractionInterval = 2,
+    leadScoreIncreased = false,
+    previousLeadScore = 0,
+    currentLeadScore = 0
+  } = params;
   
-  // Extract every N turns
-  if (currentTurn % extractionInterval === 0) {
+  // Don't extract before minimum turn
+  if (currentTurn < MIN_TURN_FOR_EXTRACTION) {
+    return false;
+  }
+  
+  // Always extract on turn 2 (first extraction)
+  if (currentTurn === MIN_TURN_FOR_EXTRACTION) {
     return true;
   }
   
-  // Also extract on first turn
-  if (currentTurn === 1) {
+  // Extract if lead score increased significantly (10+ points)
+  if (leadScoreIncreased && currentLeadScore - previousLeadScore >= 10) {
+    return true;
+  }
+  
+  // Extract every N turns after last extraction
+  const turnsSinceLastExtraction = currentTurn - lastExtractionTurn;
+  if (turnsSinceLastExtraction >= extractionInterval) {
     return true;
   }
   

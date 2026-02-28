@@ -8,6 +8,7 @@ import type {
   ThreadDepth,
   UserIntent
 } from './types';
+import {detectUserLanguage, isVeryShortMessage, isFrustratedMessage} from './language-detector';
 
 /**
  * LLM Response configuration from environment.
@@ -69,47 +70,61 @@ export interface LLMResponderInput {
 /**
  * Build system prompt for the LLM.
  */
-function buildSystemPrompt(locale: Locale): string {
-  const localeName = locale === 'ru' ? 'Russian' : locale === 'uk' ? 'Ukrainian' : locale === 'sr-ME' ? 'Montenegrin' : 'English';
+function buildSystemPrompt(locale: Locale, message: string, history: Array<{role: string; content: string}>): string {
+  // Detect user's actual language from current message
+  const detectedLocale = detectUserLanguage(message, history);
+  const languageName = detectedLocale === 'ru' ? 'Russian' : detectedLocale === 'uk' ? 'Ukrainian' : detectedLocale === 'sr-ME' ? 'Montenegrin' : 'English';
+  
+  // Check if user message is very short
+  const userMessageShort = isVeryShortMessage(message);
+  
+  // Check if user seems frustrated
+  const userFrustrated = isFrustratedMessage(message, detectedLocale);
 
   return [
     `You are SYSTEMA.WORKS sales AI assistant for a digital agency.`,
-    `Respond in ${localeName} language naturally and conversationally.`,
     ``,
-    `YOUR GOAL:`,
-    `1. Provide helpful consultation to build trust`,
-    `2. Gradually escalate toward lead qualification`,
-    `3. Collect contact info and move to manager handoff`,
+    `LANGUAGE RULE (CRITICAL):`,
+    `Respond in the SAME LANGUAGE as the user's CURRENT message.`,
+    `Detected user language: ${languageName}`,
+    `If user writes in Russian → respond in Russian`,
+    `If user writes in English → respond in English`,
+    `If user writes in Ukrainian → respond in Ukrainian`,
+    `If user writes in Montenegrin → respond in Montenegrin`,
     ``,
-    `RESPONSE GUIDELINES:`,
-    `- acknowledgment: Show you understood the user (1 short sentence)`,
-    `- valueAdd: Add value with expertise, options, or insights (1-2 sentences)`,
-    `- explorationInvite: Question to move toward qualification (0-1 questions)`,
-    `- shouldAskQuestion: true when appropriate for escalation`,
+    `RESPONSE LENGTH:`,
+    userMessageShort 
+      ? `- User message is VERY SHORT → Keep your response to 1 sentence max`
+      : `- User message is normal length → Keep your response to 1-2 sentences max`,
+    `- Max 1 question per turn (0 if user seems frustrated)`,
+    userFrustrated
+      ? `- User seems FRUSTRATED → Be extra brief, NO questions, just acknowledge and help`
+      : `- Be concise and direct`,
+    `- Max 150 characters (200 if complex topic)`,
     ``,
-    `ESCALATION STRATEGY:`,
-    `- Turn 1-2: Build rapport, understand their needs`,
-    `- Turn 3-4: Show expertise, suggest options`,
-    `- Turn 5+: Start qualification (timeline, budget, contact)`,
-    `- After good context: Ask for contact info to proceed`,
+    `RESPONSE STRUCTURE:`,
+    `- acknowledgment: Show you understood (3-10 words)`,
+    `- valueAdd: Add value OR ask for missing info (10-80 characters)`,
+    `- explorationInvite: Optional question ONLY if appropriate (0-50 characters)`,
     ``,
-    `QUALIFICATION TRIGGERS:`,
-    `- After 3+ turns with good context → ask for contact`,
-    `- User shows interest in pricing → ask for contact details`,
-    `- User mentions timeline/urgency → suggest call with manager`,
-    `- User asks "what's next" → propose handoff to manager`,
+    `WHEN TO ASK QUESTIONS:`,
+    `- Turn 1-2: NO questions (build rapport)`,
+    `- Turn 3+: Max 1 question per 2 turns`,
+    `- User frustrated: NO questions`,
+    `- User message very short: NO questions`,
+    `- Handoff ready: Ask for contact info`,
     ``,
-    `CONTACT COLLECTION:`,
-    `- Natural transition: "To discuss details, what's your name and contact?"`,
-    `- After scope is clear: "Let me connect you with a manager. Your contact?"`,
-    `- When ready: "Ready to start? I'll have a manager reach out. Your contact info?"`,
+    `AVOID:`,
+    `- "I understand" (overused - use variations)`,
+    `- "Could you share" (too formal)`,
+    `- "What specific" (repetitive)`,
+    `- Long paragraphs`,
+    `- Multiple questions`,
     ``,
-    `CONVERSATION STYLE:`,
-    `- Sound like a human consultant, not a questionnaire`,
-    `- Acknowledge specifics from user's message`,
-    `- Share relevant expertise or options`,
-    `- Be proactive about moving forward`,
-    `- Keep responses concise: 2-4 sentences total`,
+    `HANDOFF RULE:`,
+    `- If user asks for manager AND contact is captured → Confirm and END conversation`,
+    `- Response: "Менеджер с вами свяжется в ближайшее время" / "Manager will contact you soon"`,
+    `- Set shouldAskQuestion: false`,
     ``,
     `OUTPUT: Return JSON only with keys: acknowledgment, valueAdd, explorationInvite, shouldAskQuestion`
   ].join('\n');
@@ -288,7 +303,7 @@ async function callLLM(params: {
  * Generate LLM-based conversational response.
  */
 export async function generateLLMResponse(params: LLMResponderInput): Promise<LLMResponse | null> {
-  const systemPrompt = buildSystemPrompt(params.locale);
+  const systemPrompt = buildSystemPrompt(params.locale, params.message, params.history);
   const developerPrompt = buildDeveloperPrompt();
   const userPrompt = buildUserPrompt(params);
   

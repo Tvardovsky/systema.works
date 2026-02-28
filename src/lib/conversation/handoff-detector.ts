@@ -9,7 +9,8 @@ const HANDOFF_REQUEST_PATTERNS: RegExp[] = [
   /\b(созвон|дзвінок|call|meeting|встреча|зустріч|conference)\b/i,
   /\b(готов|готовий|ready|хочу|want|желаю|бажаю)\s+(начинать|починати|start|begin|работать|працювати)\b/i,
   /\b(договор|contract|proposal|кп|оценка|оцінка|estimate|расчет|розрахунок)\b/i,
-  /\b(передайте|передайте|transfer|connect|соедините|з'єднайте)\b/i
+  /\b(передайте|передайте|transfer|connect|соедините|з'єднайте)\b/i,
+  /\b(позови|поклич|call\s+someone|get\s+someone|want\s+human)\b/i
 ];
 
 /**
@@ -20,6 +21,14 @@ const COMMITMENT_PATTERNS: RegExp[] = [
   /\b(запускать|запускати|launch|start|начинать|починати)\b/i,
   /\b(подписать|підписати|sign|contract|договор|угода)\b/i,
   /\b(оплатить|оплатити|pay|payment|оплата|плата)\b/i
+];
+
+/**
+ * Patterns indicating frustration with bot.
+ */
+const BOT_FRUSTRATION_PATTERNS: RegExp[] = [
+  /\b(бот|robot|robot|automaton|бездушн|не хочу\s+общаться)\b/i,
+  /\b(достаточно|хватит|прекрати|отстань|ухожу)\b/i
 ];
 
 /**
@@ -36,6 +45,13 @@ const HANDOFF_REQUIRED_FIELDS: Record<string, TopicThreadKey> = {
  */
 function isExplicitHandoffRequest(message: string): boolean {
   return HANDOFF_REQUEST_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
+ * Check if user is frustrated with bot.
+ */
+function isBotFrustration(message: string): boolean {
+  return BOT_FRUSTRATION_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 /**
@@ -140,15 +156,24 @@ function calculateHandoffConfidence(
 export function detectHandoffSignal(params: {
   context: ConversationContext;
   message: string;
+  handoffRequestCount?: number;
+  contactCaptured?: boolean;
 }): HandoffSignal {
-  const {context, message} = params;
+  const {context, message, handoffRequestCount = 0, contactCaptured = false} = params;
 
   const signals: string[] = [];
   const missingInfo = extractMissingInfo(context);
 
-  // Check for explicit request
-  if (isExplicitHandoffRequest(message)) {
+  // Check for explicit handoff request
+  const explicitRequest = isExplicitHandoffRequest(message);
+  if (explicitRequest) {
     signals.push('explicit_request');
+  }
+
+  // Check for bot frustration (wants human)
+  const frustratedWithBot = isBotFrustration(message);
+  if (frustratedWithBot) {
+    signals.push('bot_frustration');
   }
 
   // Check for commitment
@@ -175,16 +200,37 @@ export function detectHandoffSignal(params: {
   // Calculate confidence
   const confidence = calculateHandoffConfidence(context, message);
 
-  // Determine if ready
-  const isReady =
-    confidence >= 0.6 ||
-    (isExplicitHandoffRequest(message) && missingInfo.length <= 2);
+  // Determine action based on request count and contact status
+  let action: 'continue' | 'collect_contact' | 'immediate_handoff' = 'continue';
+  let isReady = false;
+
+  if (explicitRequest || frustratedWithBot) {
+    if (contactCaptured) {
+      // Contact already provided → immediate handoff
+      action = 'immediate_handoff';
+      isReady = true;
+    } else if (handoffRequestCount >= 1) {
+      // Second request → immediate handoff even without contact
+      action = 'immediate_handoff';
+      isReady = true;
+    } else {
+      // First request → collect contact
+      action = 'collect_contact';
+      isReady = false;
+    }
+  } else if (confidence >= 0.6 || missingInfo.length <= 2) {
+    isReady = true;
+    action = contactCaptured ? 'immediate_handoff' : 'collect_contact';
+  }
 
   return {
     isReady,
     confidence,
     signals,
-    missingInfo
+    missingInfo,
+    action,
+    shouldAskForContact: action === 'collect_contact' && !contactCaptured,
+    shouldEndConversation: action === 'immediate_handoff' && contactCaptured
   };
 }
 

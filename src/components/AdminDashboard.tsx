@@ -423,6 +423,7 @@ export function AdminDashboard({locale, role}: Props) {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [savingBrief, setSavingBrief] = useState(false);
+  const [extractingBrief, setExtractingBrief] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionNote, setActionNote] = useState('');
   const [briefDraft, setBriefDraft] = useState<BriefDraft>(EMPTY_BRIEF_DRAFT);
@@ -727,6 +728,45 @@ export function AdminDashboard({locale, role}: Props) {
       note: ''
     });
   }, [briefBundle.data?.brief]);
+
+  const extractBrief = useCallback(async () => {
+    if (!selectedConversationId || extractingBrief) {
+      return;
+    }
+    setExtractingBrief(true);
+    try {
+      const result = await fetchAdmin<{
+        brief: any;
+        extraction: {
+          completenessScore: number;
+          readyForHandoff: boolean;
+          fieldsUpdated: string[];
+          llmCallsCount: number;
+          modelUsed: string;
+        };
+      }>(`/api/admin/conversations/${selectedConversationId}/extract`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(headers ?? {})
+        }
+      });
+      
+      // Reload conversation details to show updated brief
+      if (selectedCustomerId) {
+        await loadConversationDetails(selectedConversationId, selectedCustomerId);
+      }
+      await loadPipeline();
+      
+      // Show success message
+      window.alert(`Brief extracted successfully!\n\nCompleteness: ${result.extraction.completenessScore}%\nFields updated: ${result.extraction.fieldsUpdated.join(', ')}\nReady for handoff: ${result.extraction.readyForHandoff ? 'Yes ✓' : 'No'}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to extract brief';
+      window.alert(`Extraction error: ${message}`);
+    } finally {
+      setExtractingBrief(false);
+    }
+  }, [extractingBrief, fetchAdmin, headers, loadConversationDetails, loadPipeline, selectedConversationId, selectedCustomerId]);
 
   const patchBrief = useCallback(async () => {
     if (!selectedConversationId || savingBrief) {
@@ -1254,9 +1294,24 @@ export function AdminDashboard({locale, role}: Props) {
               <div className="card-body p-5">
                 <div className="admin-v2-card-head">
                   <h2 className="text-lg font-bold text-primary">{t('sections.brief')}</h2>
-                  <button className="btn btn-primary btn-sm" type="button" disabled={!selectedConversationId || savingBrief} onClick={() => void patchBrief()}>
-                    {savingBrief ? t('actions.saving') : t('actions.saveBrief')}
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      className="btn btn-secondary btn-sm" 
+                      type="button" 
+                      disabled={!selectedConversationId || extractingBrief}
+                      onClick={() => void extractBrief()}
+                    >
+                      {extractingBrief ? 'Extracting...' : '✨ Extract from Chat'}
+                    </button>
+                    <button 
+                      className="btn btn-primary btn-sm" 
+                      type="button" 
+                      disabled={!selectedConversationId || savingBrief} 
+                      onClick={() => void patchBrief()}
+                    >
+                      {savingBrief ? t('actions.saving') : t('actions.saveBrief')}
+                    </button>
+                  </div>
                 </div>
 
                 {briefBundle.error ? (
