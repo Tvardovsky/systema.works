@@ -4,6 +4,7 @@ import {FormEvent, useCallback, useEffect, useMemo, useRef, useState} from 'reac
 import {Turnstile} from '@marsidev/react-turnstile';
 import {useLocale, useTranslations} from 'next-intl';
 import type {Locale} from '@/types/lead';
+import {chatSoundManager} from '@/lib/chat-sounds';
 
 type ChatMode = 'normal' | 'handoff_locked' | 'handoff_low_cost' | 'safety_locked';
 type SafetyReason = 'abuse' | 'exploit' | 'invalid_email' | 'invalid_phone' | 'invalid_name';
@@ -190,6 +191,7 @@ export function ChatWidget() {
   const scrollLockSnapshotRef = useRef<ScrollLockSnapshot | null>(null);
   const touchStartYRef = useRef<number | null>(null);
   const touchScrollableRef = useRef<HTMLElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const createMessage = useCallback((role: ChatMessage['role'], content: string): ChatMessage => {
     messageSequenceRef.current += 1;
@@ -531,6 +533,14 @@ export function ChatWidget() {
     return () => window.clearInterval(timer);
   }, [chatLocked, retryAfterSeconds]);
 
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+    }
+  }, [input]);
+
   async function onSubmitMessage(event: FormEvent) {
     event.preventDefault();
     if (!sessionId || !input.trim() || loading) {
@@ -541,6 +551,9 @@ export function ChatWidget() {
     setInput('');
     setLoading(true);
     setMessages((prev) => [...prev, createMessage('user', userText)]);
+    
+    // Play send sound
+    chatSoundManager.play('send');
 
     const response = await fetch('/api/chat/message', {
       method: 'POST',
@@ -596,23 +609,50 @@ export function ChatWidget() {
       setMessages((prev) => [...prev, createMessage('assistant', data.answer)]);
     }
     setLoading(false);
+    
+    // Play receive sound when AI responds
+    if (data.answer) {
+      setTimeout(() => chatSoundManager.play('receive'), 100);
+    }
   }
+
+  const handleOpen = useCallback(() => {
+    setOpen(true);
+    restoreSessionIfExists();
+    chatSoundManager.play('open');
+  }, [restoreSessionIfExists]);
+
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    chatSoundManager.play('close');
+  }, []);
+
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      if (sessionId && input.trim() && !loading) {
+        onSubmitMessage(event as any);
+      }
+    }
+  }, [sessionId, input, loading]);
 
   return (
     <>
       <button
         className="chat-launcher"
         type="button"
-        onClick={() => {
-          if (open) {
-            setOpen(false);
-            return;
-          }
-          setOpen(true);
-          restoreSessionIfExists();
-        }}
+        onClick={handleOpen}
+        aria-label={open ? t('close') : t('cta')}
       >
-        {open ? t('close') : t('cta')}
+        {open ? (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        ) : (
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          </svg>
+        )}
       </button>
 
       {open ? (
@@ -622,9 +662,12 @@ export function ChatWidget() {
             <button
               className="chat-close-button"
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={handleClose}
+              aria-label={t('close')}
             >
-              {t('close')}
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
             </button>
           </header>
 
@@ -714,13 +757,26 @@ export function ChatWidget() {
 
           {canCompose ? (
             <form className="chat-composer" onSubmit={onSubmitMessage}>
-              <input
+              <textarea
+                ref={textareaRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder={t('placeholder')}
                 disabled={loading}
+                rows={1}
+                className="chat-input"
               />
-              <button type="submit" disabled={loading || !input.trim()}>{t('send')}</button>
+              <button 
+                type="submit" 
+                disabled={loading || !input.trim()}
+                className="chat-send-button"
+                aria-label={t('send')}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
+              </button>
             </form>
           ) : null}
 
