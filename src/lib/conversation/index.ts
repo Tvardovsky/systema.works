@@ -76,6 +76,14 @@ export {
   createEmptyMergedBrief
 } from './brief-merger';
 
+// Witty responses
+export {
+  getWittyResponse,
+  detectRudenessLevel,
+  shouldGiveWittyResponse,
+  WITTY_RESPONSES
+} from './witty-responses';
+
 export type {
   TopicThreadKey,
   ThreadDepth,

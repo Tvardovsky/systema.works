@@ -14,6 +14,7 @@ import {initializeThreads, getMostActiveThread, updateThread, promoteThreadDepth
 import {analyzeUserIntent} from './intent-analyzer';
 import {extractBriefFromConversation, shouldExtractBrief} from './brief-extractor';
 import type {BriefExtractionResult, MergedBrief} from './brief-types';
+import {detectRudenessLevel, getWittyResponse} from './witty-responses';
 
 /**
  * Brief extraction configuration.
@@ -145,6 +146,41 @@ function handleHandoff(
 }
 
 /**
+ * Handle witty response to rudeness/profanity.
+ */
+function handleWittyResponse(
+  locale: Locale,
+  message: string,
+  context: ConversationContext,
+  turnNumber: number,
+  rudenessLevel: import('./witty-responses').WitCategory
+): ConversationalTurn {
+  const wittyResponse = getWittyResponse(rudenessLevel, locale);
+  
+  return {
+    response: {
+      acknowledgment: '',
+      valueAdd: wittyResponse,
+      explorationInvite: undefined,
+      question: undefined,
+      shouldAskQuestion: false,
+      nextThread: context.activeThread ?? undefined,
+      handoffSignal: false
+    },
+    context,
+    updatedThreads: context.threads,
+    handoffReady: false,
+    leadIntentScore: calculateLeadIntentScore(context),
+    diagnostics: {
+      intentType: context.userIntent.type,
+      sentiment: context.userIntent.sentiment,
+      activeThread: context.activeThread,
+      questionsCount: 0
+    }
+  };
+}
+
+/**
  * Handle immediate handoff - contact captured, end conversation.
  */
 function handleImmediateHandoff(
@@ -256,6 +292,12 @@ export async function runConversationalTurn(input: ConversationalInput): Promise
   // Check for scope clarification needed (very first message, too short)
   if (turnNumber === 1 && message.trim().length < 8) {
     return handleScopeClarification(locale, message, context);
+  }
+
+  // Check for rudeness/profanity and respond with wit
+  const rudenessLevel = detectRudenessLevel(message);
+  if (rudenessLevel) {
+    return handleWittyResponse(locale, message, context, turnNumber, rudenessLevel);
   }
 
   // Check for handoff signals with contact info
