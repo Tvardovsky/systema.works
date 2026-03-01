@@ -74,12 +74,16 @@ function buildSystemPrompt(locale: Locale, message: string, history: Array<{role
   // Detect user's actual language from current message
   const detectedLocale = detectUserLanguage(message, history);
   const languageName = detectedLocale === 'ru' ? 'Russian' : detectedLocale === 'uk' ? 'Ukrainian' : detectedLocale === 'sr-ME' ? 'Montenegrin' : 'English';
-  
+
   // Check if user message is very short
   const userMessageShort = isVeryShortMessage(message);
-  
+
   // Check if user seems frustrated
   const userFrustrated = isFrustratedMessage(message, detectedLocale);
+
+  // Check if user is asking about privacy policy, terms, or legal info
+  const privacyPolicyPatterns = /\b(privacy|policy|terms|condition|agreement|legal|cookie|gdpr|data protection)\b/i;
+  const isPrivacyQuestion = privacyPolicyPatterns.test(message);
 
   return [
     `You are SYSTEMA.WORKS sales AI assistant for a digital agency.`,
@@ -125,6 +129,13 @@ function buildSystemPrompt(locale: Locale, message: string, history: Array<{role
     `- If user asks for manager AND contact is captured → Confirm and END conversation`,
     `- Response: "Менеджер с вами свяжется в ближайшее время" / "Manager will contact you soon"`,
     `- Set shouldAskQuestion: false`,
+    ``,
+    `PRIVACY POLICY / TERMS QUESTIONS:`,
+    isPrivacyQuestion
+      ? `- User is asking about privacy policy, terms, or legal info → Provide link: "/[locale]/privacy" and "/[locale]/terms"`
+      : `- If user asks about privacy/terms later → Provide links to /[locale]/privacy and /[locale]/terms`,
+    `- Always be helpful about legal/compliance questions`,
+    `- Do NOT ask for contact info when answering privacy questions`,
     ``,
     `OUTPUT: Return JSON only with keys: acknowledgment, valueAdd, explorationInvite, shouldAskQuestion`
   ].join('\n');

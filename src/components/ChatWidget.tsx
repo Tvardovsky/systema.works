@@ -298,8 +298,17 @@ export function ChatWidget() {
 
   const tryAutoStartAfterVerification = useCallback((turnstileTokenOverride?: string) => {
     const verified = turnstileVerified || Boolean(turnstileTokenOverride);
-    if (!open || !turnstileEnabled || !verified || sessionId || sessionStartInFlightRef.current || autoStartAttemptedRef.current) {
-      return;
+    
+    // If Turnstile is enabled, wait for verification
+    if (turnstileEnabled) {
+      if (!open || !verified || sessionId || sessionStartInFlightRef.current || autoStartAttemptedRef.current) {
+        return;
+      }
+    } else {
+      // If Turnstile is disabled, just check open state and session
+      if (!open || sessionId || sessionStartInFlightRef.current || autoStartAttemptedRef.current) {
+        return;
+      }
     }
 
     autoStartAttemptedRef.current = true;
@@ -361,8 +370,16 @@ export function ChatWidget() {
     if (sessionId) {
       return;
     }
+    
+    // If Turnstile is disabled, start session immediately when opened
+    if (!turnstileEnabled) {
+      tryAutoStartAfterVerification();
+      return;
+    }
+    
+    // If Turnstile is enabled, wait for verification
     tryAutoStartAfterVerification();
-  }, [open, sessionId, tryAutoStartAfterVerification]);
+  }, [open, sessionId, tryAutoStartAfterVerification, turnstileEnabled]);
 
   useEffect(() => {
     const openFromEvent = () => {
@@ -767,8 +784,8 @@ export function ChatWidget() {
                 rows={3}
                 className="chat-input"
               />
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={loading || !input.trim()}
                 className="chat-send-button"
                 aria-label={t('send')}
@@ -779,6 +796,16 @@ export function ChatWidget() {
               </button>
             </form>
           ) : null}
+
+          <footer className="chat-footer mt-3 flex items-center justify-center gap-2 text-xs text-base-content/50">
+            <a href={`/${locale}/privacy`} className="hover:text-primary hover:underline" target="_blank" rel="noopener noreferrer" data-testid="chat-footer-privacy">
+              Privacy
+            </a>
+            <span>•</span>
+            <a href={`/${locale}/terms`} className="hover:text-primary hover:underline" target="_blank" rel="noopener noreferrer" data-testid="chat-footer-terms">
+              Terms
+            </a>
+          </footer>
 
         </aside>
       ) : null}

@@ -117,6 +117,113 @@
     "contactTrust": "Odgovor u roku od 24h • English / Srpski / Русский / Українська",
     "legal": "Korišćenjem AI chata pristajete na obradu podataka iz upita radi početne procjene projekta i kontakta povodom vašeg zahtjeva."
   },
+  "Privacy": {
+    "title": "Politika privatnosti",
+    "lastUpdated": "Posljednje ažuriranje: 1. mart 2026.",
+    "intro": "Poštujemo vašu privatnost i štitimo vaše lične podatke. Ova politika objašnjava koje podatke prikupljamo, kako ih koristimo i čuvamo.",
+    "sections": {
+      "dataCollection": {
+        "title": "1. Prikupljanje podataka",
+        "content": "Prikupljamo sljedeće vrste podataka:",
+        "items": [
+          "Kontakt informacije (email, telefon, ime) koje dobrovoljno ostavljate",
+          "Podaci o projektu (ciljevi, rokovi, budžet) potrebni za procjenu",
+          "Tehnički podaci (IP adresa, pretraživač, uređaj) radi sigurnosti",
+          "Istorija razgovora u chatu za kvalifikaciju upita"
+        ]
+      },
+      "dataUsage": {
+        "title": "2. Korišćenje podataka",
+        "content": "Vaši podaci se koriste za:",
+        "items": [
+          "Početnu konsultaciju i kvalifikaciju projekta putem AI asistenta",
+          "Kontaktiranje radi diskusije o detaljima projekta",
+          "Pripremu komercijalne ponude",
+          "Poboljšanje kvaliteta naših usluga"
+        ]
+      },
+      "dataStorage": {
+        "title": "3. Čuvanje podataka",
+        "content": "Čuvamo vaše podatke 180 dana od posljednjeg kontakta. Nakon tog perioda, podaci se automatski brišu ako ne postanete klijent."
+      },
+      "dataSharing": {
+        "title": "4. Dijeljenje podataka",
+        "content": "Ne dijelimo vaše podatke sa trećim licima, osim:",
+        "items": [
+          "Proslijeđivanja menadžeru kompanije radi kontakta",
+          "Slučajeva propisanih zakonom",
+          "Vaših eksplicitnih zahtjeva za dijeljenje podataka"
+        ]
+      },
+      "security": {
+        "title": "5. Sigurnost",
+        "content": "Koristimo savremene metode zaštite podataka, uključujući enkripciju, kontrolu pristupa i redovne sigurnosne revizije."
+      },
+      "yourRights": {
+        "title": "6. Vaša prava",
+        "content": "Imate pravo da:",
+        "items": [
+          "Zatražite kopiju vaših podataka",
+          "Ispravite netačne podatke",
+          "Obrišete vaše podatke",
+          "Povučete pristanak za obradu podataka"
+        ]
+      },
+      "cookies": {
+        "title": "7. Kolačići",
+        "content": "Koristimo kolačiće za održavanje chat sesije i poboljšanje korisničkog iskustva. Možete isključiti kolačiće u podešavanjima pretraživača."
+      },
+      "contact": {
+        "title": "8. Kontakt",
+        "content": "Za pitanja o obradi podataka kontaktirajte: privacy@systema.works"
+      }
+    }
+  },
+  "Terms": {
+    "title": "Uslovi korišćenja",
+    "lastUpdated": "Posljednje ažuriranje: 1. mart 2026.",
+    "intro": "Korišćenjem našeg sajta i usluga slažete se sa ovim uslovima. Pažljivo ih pročitajte prije korišćenja.",
+    "sections": {
+      "services": {
+        "title": "1. Usluge",
+        "content": "SYSTEMA.WORKS pruža usluge izrade sajtova, veb aplikacija, mobilnih aplikacija, automatizacije poslovnih procesa i implementacije AI rješenja."
+      },
+      "consultation": {
+        "title": "2. Konsultacija",
+        "content": "AI asistent pruža početnu konsultaciju i prikuplja informacije o projektu. Konačnu procjenu i ponudu daje menadžer kompanije."
+      },
+      "userObligations": {
+        "title": "3. Obaveze korisnika",
+        "content": "Korišćenjem naših usluga obavezujete se da:",
+        "items": [
+          "Pružite tačne i kompletne informacije o projektu",
+          "Ne koristite servis u ilegalne svrhe",
+          "Ne ometate rad servisa i ne pokušavate neovlašćen pristup",
+          "Održavate poštovan ton u komunikaciji"
+        ]
+      },
+      "intellectualProperty": {
+        "title": "4. Intelektualna svojina",
+        "content": "Svi materijali na sajtu, uključujući tekstove, dizajn, logotipe i kod, vlasništvo su SYSTEMA.WORKS i zaštićeni su autorskim pravom."
+      },
+      "limitationOfLiability": {
+        "title": "5. Ograničenje odgovornosti",
+        "content": "Ne snosimo odgovornost za indirektnu štetu, izgubljenu dobit ili gubitak podataka nastale korišćenjem naših usluga."
+      },
+      "modifications": {
+        "title": "6. Izmjene uslova",
+        "content": "Zadržavamo pravo da izmijenimo ove uslove u bilo kom trenutku. Izmjene stupaju na snagu objavom na sajtu."
+      },
+      "governingLaw": {
+        "title": "7. Mjerodavno pravo",
+        "content": "Ovi uslovi se regulišu zakonima Crne Gore. Svi sporovi se rješavaju na sudu u mjestu registracije kompanije."
+      },
+      "contact": {
+        "title": "8. Kontakt",
+        "content": "Za pitanja o uslovima korišćenja kontaktirajte: legal@systema.works"
+      }
+    }
+  },
   "Chat": {
     "title": "SYSTEMA • konsultacija u chatu",
     "cta": "Chat",

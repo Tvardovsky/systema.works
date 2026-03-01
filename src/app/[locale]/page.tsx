@@ -303,7 +303,15 @@ export default async function HomePage({params}: Props) {
 
           <footer id="legal" className="legal legal-compact reveal delay-2">
             <span>systema.works</span>
-            <span>{t('legal')}</span>
+            <div className="flex items-center gap-3">
+              <span>{t('legal')}</span>
+              <div className="hidden items-center gap-2 sm:flex">
+                <span className="text-base-content/40">•</span>
+                <a href="/[locale]/privacy" className="text-sm text-base-content/70 hover:text-primary hover:underline" data-testid="footer-privacy-link">Privacy</a>
+                <span className="text-base-content/40">•</span>
+                <a href="/[locale]/terms" className="text-sm text-base-content/70 hover:text-primary hover:underline" data-testid="footer-terms-link">Terms</a>
+              </div>
+            </div>
           </footer>
         </div>
       </main>

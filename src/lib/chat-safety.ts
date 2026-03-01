@@ -157,8 +157,36 @@ function hasInvalidPhone(message: string): boolean {
   return digits.length < 8 || digits.length > 15;
 }
 
+/**
+ * Patterns that indicate user is asking about privacy/terms/help (NOT providing name).
+ */
+const PRIVACY_AND_HELP_PATTERNS: RegExp[] = [
+  /\bprivacy\b/i,
+  /\bpolicy\b/i,
+  /\bterms\b/i,
+  /\bcondition\b/i,
+  /\bagreement\b/i,
+  /\blegal\b/i,
+  /\blicense\b/i,
+  /\blicensing\b/i,
+  /\bcookie\b/i,
+  /\bgdpr\b/i,
+  /\bdata protection\b/i,
+  /\bpersonal data\b/i,
+  /\bгде.*ссылк\b/i,
+  /\bгде.*политик\b/i,
+  /\bде.*посилан\b/i,
+  /\bgdje.*link\b/i
+];
+
 function hasInvalidName(message: string): boolean {
   const lower = message.toLowerCase();
+  
+  // CRITICAL: Never trigger on privacy policy, terms, or help questions
+  if (matchesAny(PRIVACY_AND_HELP_PATTERNS, message)) {
+    return false;
+  }
+  
   const hasNameHint = lower.includes('name') || lower.includes('имя') || lower.includes('зовут') || lower.includes('zovem se');
   const candidate = extractNameCandidate(message);
   if (!candidate) {

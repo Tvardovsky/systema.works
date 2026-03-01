@@ -112,10 +112,117 @@
     "aiPoint2": "Anti-bot checks, server-side validation, and response QA at every step.",
     "aiPoint3": "Inquiries and chat history are available for admin review in one place.",
     "aiCta": "Open chat",
-    "contactTitle": "Let’s discuss your project",
-    "contactBody": "Share your goal, timeline, and a contact. We’ll reply with a plan and next steps.",
+    "contactTitle": "Let's discuss your project",
+    "contactBody": "Share your goal, timeline, and a contact. We'll reply with a plan and next steps.",
     "contactTrust": "Reply within 24 hours • English / Srpski / Russian / Ukrainian",
     "legal": "By using the AI chat, you agree that we may process your inquiry data for initial project assessment and follow-up."
+  },
+  "Privacy": {
+    "title": "Privacy Policy",
+    "lastUpdated": "Last updated: March 1, 2026",
+    "intro": "We respect your privacy and are committed to protecting your personal data. This policy explains what data we collect, how we use it, and how we store it.",
+    "sections": {
+      "dataCollection": {
+        "title": "1. Data Collection",
+        "content": "We collect the following types of data:",
+        "items": [
+          "Contact information (email, phone, name) that you voluntarily provide",
+          "Project information (goals, timeline, budget) needed for project estimation",
+          "Technical data (IP address, browser, device) for security purposes",
+          "Chat history for lead qualification"
+        ]
+      },
+      "dataUsage": {
+        "title": "2. Data Usage",
+        "content": "Your data is used for:",
+        "items": [
+          "Initial consultation and project qualification via AI assistant",
+          "Contacting you to discuss project details",
+          "Preparing commercial proposals",
+          "Improving the quality of our services"
+        ]
+      },
+      "dataStorage": {
+        "title": "3. Data Storage",
+        "content": "We store your data for 180 days from the last contact. After this period, data is automatically deleted unless you become a client."
+      },
+      "dataSharing": {
+        "title": "4. Data Sharing",
+        "content": "We do not share your data with third parties, except:",
+        "items": [
+          "Sharing with company managers to contact you",
+          "Cases required by law",
+          "Your explicit requests to share data"
+        ]
+      },
+      "security": {
+        "title": "5. Security",
+        "content": "We use modern data protection methods including encryption, access control, and regular security audits."
+      },
+      "yourRights": {
+        "title": "6. Your Rights",
+        "content": "You have the right to:",
+        "items": [
+          "Request a copy of your data",
+          "Correct inaccurate data",
+          "Delete your data",
+          "Withdraw consent for data processing"
+        ]
+      },
+      "cookies": {
+        "title": "7. Cookies",
+        "content": "We use cookies to maintain chat session and improve user experience. You can disable cookies in your browser settings."
+      },
+      "contact": {
+        "title": "8. Contact",
+        "content": "For data processing inquiries, contact: privacy@systema.works"
+      }
+    }
+  },
+  "Terms": {
+    "title": "Terms of Service",
+    "lastUpdated": "Last updated: March 1, 2026",
+    "intro": "By using our website and services, you agree to these terms. Please read them carefully before using our services.",
+    "sections": {
+      "services": {
+        "title": "1. Services",
+        "content": "SYSTEMA.WORKS provides services for website development, web applications, mobile applications, business process automation, and AI solutions implementation."
+      },
+      "consultation": {
+        "title": "2. Consultation",
+        "content": "The AI assistant provides initial consultation and collects project information. Final estimation and proposal are provided by a company manager."
+      },
+      "userObligations": {
+        "title": "3. User Obligations",
+        "content": "When using our services, you agree to:",
+        "items": [
+          "Provide accurate and complete project information",
+          "Not use the service for illegal purposes",
+          "Not disrupt the service or attempt unauthorized access",
+          "Maintain a respectful tone in communication"
+        ]
+      },
+      "intellectualProperty": {
+        "title": "4. Intellectual Property",
+        "content": "All website materials, including texts, design, logos, and code, are the property of SYSTEMA.WORKS and protected by copyright law."
+      },
+      "limitationOfLiability": {
+        "title": "5. Limitation of Liability",
+        "content": "We are not liable for indirect damages, lost profits, or data loss resulting from the use of our services."
+      },
+      "modifications": {
+        "title": "6. Terms Modifications",
+        "content": "We reserve the right to modify these terms at any time. Changes take effect upon publication on the website."
+      },
+      "governingLaw": {
+        "title": "7. Governing Law",
+        "content": "These terms are governed by the laws of Montenegro. All disputes are resolved in the court at the company's registered location."
+      },
+      "contact": {
+        "title": "8. Contact",
+        "content": "For terms of service inquiries, contact: legal@systema.works"
+      }
+    }
   },
   "Chat": {
     "title": "SYSTEMA • Chat consultation",
