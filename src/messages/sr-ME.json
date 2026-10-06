@@ -1,142 +1,88 @@
 {
   "Metadata": {
-    "title": "SYSTEMA.WORKS | Sajtovi, aplikacije, automatizacija, AI, SMM",
-    "description": "Dizajniramo i razvijamo sajtove, veb i mobilne aplikacije, automatizaciju i AI asistente za rast biznisa."
+    "title": "SYSTEMA.WORKS — sajtovi, aplikacije, automatizacija i AI",
+    "description": "Razvijamo sajtove, veb i mobilne aplikacije, automatizaciju i AI rješenja. Jedan tim za cijeli ciklus: od ideje do lansiranja i podrške."
   },
   "Language": {
     "label": "Jezik"
   },
   "Landing": {
+    "skip": "Pređi na sadržaj",
+    "navLabel": "Glavna navigacija",
     "navServices": "Usluge",
     "navCases": "Primjer",
-    "navProcess": "Kako radimo",
+    "navProcess": "Proces",
     "navContact": "Kontakt",
-    "eyebrow": "Sajtovi • Aplikacije • iOS/Android • Automatizacija • AI • SMM",
-    "title": "Gradimo digitalne proizvode koji donose upite, ubrzavaju procese i povećavaju prihod.",
-    "subtitle": "Od brzih promotivnih stranica do složenih veb i mobilnih proizvoda: strategija, dizajn, razvoj i promocija u jednom timu.",
-    "ctaPrimary": "Pokreni konsultaciju",
-    "ctaSecondary": "Otvori monte.guide",
-    "trust": "Dogovaramo faze i rokove unaprijed. Komunikacija je kratka i jasna. 4 jezika. Rezultat se mjeri.",
-    "stat1Value": "24/7",
-    "stat1": "AI kvalifikacija upita i prvi kontakt bez pauze",
-    "stat2Value": "4 jezika",
-    "stat2": "Lokalizacija od prve verzije — za brži izlazak na nova tržišta",
-    "stat3Value": "Jedan tim",
-    "stat3": "Strategija, dizajn, razvoj i promocija u jednom odgovornom timu",
-    "servicesTitle": "Šta gradimo",
-    "servicesIntro": "Pokrivamo cijeli ciklus: razrada zadatka, dizajn, razvoj, integracije, lansiranje i skaliranje.",
+    "heroEyebrow": "Studio za razvoj",
+    "heroTitle": "Sajtovi, aplikacije i AI automatizacija za biznis",
+    "heroSubtitle": "Projekat vodimo od ideje do lansiranja i podržavamo ga poslije: dizajn, razvoj, integracije, AI. Jedan tim, jasne faze i rokovi.",
+    "ctaContact": "Javite nam se",
+    "ctaCase": "Pogledaj primjer",
+    "fact1Value": "4 jezika",
+    "fact1Label": "Lokalizaciju predviđamo od prve verzije",
+    "fact2Value": "1 tim",
+    "fact2Label": "Dizajn, razvoj i lansiranje bez posrednika",
+    "fact3Value": "24 sata",
+    "fact3Label": "Na upite odgovaramo u roku od jednog dana",
+    "servicesTitle": "Čime se bavimo",
+    "servicesIntro": "Cijeli ciklus u jednom timu: razrada zadatka, dizajn, razvoj, integracije, lansiranje i razvoj proizvoda.",
     "service1Title": "Sajtovi i promotivne stranice",
-    "service1Body": "Brze stranice sa jasnom ponudom, SEO strukturom i konverzionom analitikom.",
+    "service1Body": "Brze stranice sa jasnom ponudom, SEO strukturom i analitikom konverzija.",
     "service2Title": "Veb aplikacije",
-    "service2Body": "Kontrolne table, korisnički portali, marketplejsi i interni sistemi koji rastu zajedno sa biznisom.",
-    "service3Title": "Mobilne aplikacije (iOS i Android)",
-    "service3Body": "Nativne i krosplatformske aplikacije povezane sa serverskim dijelom, CRM-om i poslovnim procesima.",
-    "service4Title": "Automatizacija • AI • SMM",
-    "service4Body": "AI asistenti, kvalifikacija upita, tokovi u mesendžerima i kampanje vezane za prodaju.",
-    "techTitle": "Kako gradimo",
-    "techBody": "Postavljamo arhitekturu tako da proizvod bude brz, stabilan i lak za održavanje — bez prepravki poslije lansiranja.",
-    "metric1": "Spremnost arhitekture",
-    "metric2": "Pokrivenost integracija",
-    "metric3": "Jasna analitika",
-    "metric4": "Brzina izlaska",
-    "caseBadge": "Glavni primjer",
-    "caseTitle": "monte.guide: od ideje do toka upita",
-    "caseBody": "monte.guide je živi proizvod koji stalno razvijamo. Pokazuje kako dobro korisničko iskustvo, inženjering i lokalizacija pretvaraju katalog u kanal za upite.",
-    "caseNarrative": "Korisnik brzo pronalazi uslugu, a biznis dobija ciljane upite.",
-    "caseCtaPrimary": "Otvori monte.guide",
-    "caseCtaSecondary": "Pričajmo o projektu",
-    "caseOutcome1": "Višejezično korisničko iskustvo",
-    "caseOutcome2": "Logika proizvoda usmjerena na upite",
-    "caseOutcome3": "Skalabilna servisna platforma",
-    "caseMetric1Value": "4",
-    "caseMetric1Label": "aktivna jezika",
-    "caseMetric2Value": "Sajt + Telegram",
-    "caseMetric2Label": "kanali privlačenja",
-    "caseMetric3Value": "24/7",
-    "caseMetric3Label": "AI kvalifikacija upita",
-    "monteTitle": "Šta je unutar monte.guide",
-    "monteIntro": "Platforma za pretragu usluga u Crnoj Gori koja spaja veb iskustvo, ulaz kroz mesendžere i arhitekturu spremnu za rast.",
-    "montePreviewBadge": "Primjer proizvoda",
-    "monteTag1": "Pretraga usluga",
-    "monteTag2": "Messenger saobraćaj",
-    "monteTag3": "Kvalifikovani upiti",
-    "monteCta": "Posjeti monte.guide",
-    "monteFeature1Title": "Telegram bot + mini-aplikacija",
-    "monteFeature1Body": "Korisnik pretražuje prirodnim jezikom i odmah otvara rezultat u mini-aplikaciji.",
-    "monteFeature2Title": "Lokalizacija na 4 jezika",
-    "monteFeature2Body": "Sadržaj i pretraga se prilagođavaju jeziku da bi ponuda bila jasna odmah.",
-    "monteFeature3Title": "Nalozi i omiljeno",
-    "monteFeature3Body": "Korisnici čuvaju kartice, porede pružaoce i vraćaju se bez gubitka konteksta.",
-    "monteFeature4Title": "Kabinet pružaoca",
-    "monteFeature4Body": "Biznis preuzima profil, ažurira podatke i povećava vidljivost u katalogu.",
-    "monteFeature5Title": "Pametnija pretraga i galerije",
-    "monteFeature5Body": "Relevantnija pretraga i bogatije kartice podižu povjerenje i konverzije.",
-    "monteFeature6Title": "PWA i širenje kroz mesendžere",
-    "monteFeature6Body": "Jedan proizvod: sajt, PWA koja se može instalirati i ulaz kroz Telegram.",
+    "service2Body": "Korisnički portali, kontrolne table, marketplejsi i interni sistemi koji rastu zajedno sa biznisom.",
+    "service3Title": "Mobilne aplikacije",
+    "service3Body": "iOS i Android: nativne i krosplatformske aplikacije povezane sa serverskim dijelom i CRM-om.",
+    "service4Title": "Automatizacija i AI",
+    "service4Body": "Uvodimo neuronske mreže u poslovne procese: AI asistenti i botovi, obrada dokumenata i upita, integracije sa CRM-om i mesendžerima, automatizacija SMM-a.",
+    "caseBadge": "Primjer",
+    "caseTitle": "monte.guide — katalog usluga u Crnoj Gori",
+    "caseBody": "Živ proizvod koji razvijamo i održavamo: pretraga usluga, Telegram bot sa mini-aplikacijom, kabinet za biznis, profili i omiljeno. Četiri jezika i instalacija kao PWA.",
+    "caseCta": "Otvori monte.guide",
+    "caseM1Value": "4",
+    "caseM1Label": "jezika interfejsa",
+    "caseM2Value": "Sajt + Telegram",
+    "caseM2Label": "ulazne tačke",
+    "caseM3Value": "PWA",
+    "caseM3Label": "instalira se kao aplikacija",
     "processTitle": "Kako radimo",
-    "processIntro": "Kratke iteracije, jasne faze i kontrolne tačke po rokovima.",
-    "step1Title": "Razrada zadatka i ciljevi",
-    "step1Body": "Definišemo poslovne ciljeve, publiku i metrike uspjeha.",
-    "step1Outcome": "Jasan obim posla i prioriteti",
-    "step2Title": "Arhitektura proizvoda",
-    "step2Body": "Dizajniramo korisnički tok, tehničku strukturu i integracije.",
-    "step2Outcome": "Potvrđen plan isporuke",
+    "processIntro": "Kratke iteracije i kontrolne tačke po rokovima.",
+    "step1Title": "Razrada zadatka",
+    "step1Body": "Definišemo ciljeve, publiku i metrike. Dobijate jasan obim posla i prioritete.",
+    "step2Title": "Projektovanje",
+    "step2Body": "Razrađujemo korisnički tok, strukturu i integracije. Dobijate odobren plan.",
     "step3Title": "Razvoj i lansiranje",
-    "step3Body": "Radimo u kratkim iteracijama: testiranje i analitika su uključeni.",
-    "step3Outcome": "Verzija spremna za produkciju",
-    "step4Title": "Skaliranje i optimizacija",
-    "step4Body": "Podižemo konverziju, automatizujemo rutinu i dodajemo nove tačke rasta.",
-    "step4Outcome": "Kumulativni poslovni efekat",
-    "whyTitle": "Zašto SYSTEMA",
-    "whyBody": "Dobijate jedan odgovoran tim za proizvod, razvoj i promociju.",
-    "why1Title": "Biznis prioritet",
-    "why1Body": "Svaka funkcija je vezana za poslovni cilj, ne samo za tehničku isporuku.",
-    "why2Title": "Jak proizvod i inženjering",
-    "why2Body": "Moderan interfejs i stabilna arhitektura grade se zajedno, od početka.",
-    "why3Title": "Dugoročna saradnja",
-    "why3Body": "Gradimo sisteme koje je lako održavati i skalirati i nakon lansiranja.",
-    "aiBadge": "Scenarij AI kvalifikacije",
-    "aiTitle": "AI konsultacija koja priprema brif",
-    "aiBody": "Chat postavlja nekoliko pitanja — o zadatku, rokovima, budžetu i kontaktu — i priprema brif za menadžera.",
-    "aiPreviewUser": "Treba mi promotivna stranica i chatbot koji prebacuje na menadžera za 2 nedelje.",
-    "aiPreviewAssistant": "Razumijem. Utvrdiću obim posla, rok, budžet i kontakt — pa proslijediti menadžeru kratak brif.",
-    "aiHowTitle": "Kako asistent radi",
-    "aiStep1Title": "1. Razjašnjava vaš zahtjev",
-    "aiStep1Body": "Postavlja kratka pitanja o cilju projekta, očekivanom rezultatu i prioritetu prve isporuke.",
-    "aiStep2Title": "2. Prikuplja osnovu za procjenu",
-    "aiStep2Body": "Bilježi rok, okvir budžeta i jedan kontakt da zahtjev ide dalje bez zastoja.",
-    "aiStep3Title": "3. Šalje spreman brif menadžeru",
-    "aiStep3Body": "Formira strukturiran upit, označi prioritet i prosleđuje hitne zahtjeve za brzu obradu.",
-    "aiWhatTitle": "Šta je pod kontrolom",
-    "aiPoint1": "Fokus je samo na praktičnim zahtjevima: razvoj, automatizacija, AI, SMM i UI/UX.",
-    "aiPoint2": "Na svakom koraku rade antibot provjere, provjera na serveru i kontrola kvaliteta odgovora.",
-    "aiPoint3": "Upiti i istorija razgovora dostupni su administratoru na jednom mjestu.",
-    "aiCta": "Otvori chat",
+    "step3Body": "Radimo u kratkim iteracijama, testiranje i analitika su uključeni. Dobijate gotovu verziju.",
+    "step4Title": "Razvoj proizvoda",
+    "step4Body": "Podižemo konverziju, automatizujemo rutinu i dodajemo ono što biznisu treba dalje.",
     "contactTitle": "Razgovarajmo o projektu",
-    "contactBody": "Pošaljite cilj, rok i kontakt za odgovor. Vraćamo se sa planom i sljedećim koracima.",
-    "contactTrust": "Odgovor u roku od 24h • English / Srpski / Русский / Українська",
-    "legal": "Korišćenjem AI chata pristajete na obradu podataka iz upita radi početne procjene projekta i kontakta povodom vašeg zahtjeva."
+    "contactBody": "Pišite nam u mesendžer koji vam odgovara: kratko o cilju, roku i kako da vas kontaktiramo. Odgovaramo sa planom i sljedećim koracima.",
+    "contactNote": "Odgovaramo u roku od 24 sata · English, Srpski, Русский, Українська",
+    "contactLabel": "Kontakt",
+    "legal": "© 2026 SYSTEMA.WORKS",
+    "privacy": "Privatnost",
+    "terms": "Uslovi",
+    "back": "Na početnu"
   },
   "Privacy": {
     "title": "Politika privatnosti",
-    "lastUpdated": "Posljednje ažuriranje: 1. mart 2026.",
+    "lastUpdated": "Posljednje ažuriranje: 6. oktobar 2026.",
     "intro": "Poštujemo vašu privatnost i štitimo vaše lične podatke. Ova politika objašnjava koje podatke prikupljamo, kako ih koristimo i čuvamo.",
     "sections": {
       "dataCollection": {
         "title": "1. Prikupljanje podataka",
         "content": "Prikupljamo sljedeće vrste podataka:",
         "items": [
-          "Kontakt informacije (email, telefon, ime) koje dobrovoljno ostavljate",
+          "Kontakt podaci (ime, email, telefon, nalog u mesendžeru) koje nam sami šaljete",
           "Podaci o projektu (ciljevi, rokovi, budžet) potrebni za procjenu",
           "Tehnički podaci (IP adresa, pretraživač, uređaj) radi sigurnosti",
-          "Istorija razgovora u chatu za kvalifikaciju upita"
+          "Sadržaj prepiske sa nama u mesendžerima i putem emaila"
         ]
       },
       "dataUsage": {
         "title": "2. Korišćenje podataka",
         "content": "Vaši podaci se koriste za:",
         "items": [
-          "Početnu konsultaciju i kvalifikaciju projekta putem AI asistenta",
+          "Odgovora na vaš upit i početne procjene projekta",
           "Kontaktiranje radi diskusije o detaljima projekta",
           "Pripremu komercijalne ponude",
           "Poboljšanje kvaliteta naših usluga"
@@ -144,13 +90,13 @@
       },
       "dataStorage": {
         "title": "3. Čuvanje podataka",
-        "content": "Čuvamo vaše podatke 180 dana od posljednjeg kontakta. Nakon tog perioda, podaci se automatski brišu ako ne postanete klijent."
+        "content": "Prepisku čuvamo dok je potrebna za odgovor na upit i rad na projektu, i ne duže. Možete nas u bilo kom trenutku zamoliti da obrišemo vaše podatke."
       },
       "dataSharing": {
         "title": "4. Dijeljenje podataka",
         "content": "Ne dijelimo vaše podatke sa trećim licima, osim:",
         "items": [
-          "Proslijeđivanja menadžeru kompanije radi kontakta",
+          "Prosljeđivanja zaposlenima u kompaniji radi kontakta sa vama",
           "Slučajeva propisanih zakonom",
           "Vaših eksplicitnih zahtjeva za dijeljenje podataka"
         ]
@@ -171,17 +117,18 @@
       },
       "cookies": {
         "title": "7. Kolačići",
-        "content": "Koristimo kolačiće za održavanje chat sesije i poboljšanje korisničkog iskustva. Možete isključiti kolačiće u podešavanjima pretraživača."
+        "content": "Sajt ne koristi reklamne ni analitičke kolačiće. Čuvamo samo kolačić sa izabranim jezikom interfejsa, koji možete isključiti u podešavanjima pretraživača."
       },
       "contact": {
         "title": "8. Kontakt",
         "content": "Za pitanja o obradi podataka kontaktirajte: privacy@systema.works"
       }
-    }
+    },
+    "back": "Na početnu"
   },
   "Terms": {
     "title": "Uslovi korišćenja",
-    "lastUpdated": "Posljednje ažuriranje: 1. mart 2026.",
+    "lastUpdated": "Posljednje ažuriranje: 6. oktobar 2026.",
     "intro": "Korišćenjem našeg sajta i usluga slažete se sa ovim uslovima. Pažljivo ih pročitajte prije korišćenja.",
     "sections": {
       "services": {
@@ -190,7 +137,7 @@
       },
       "consultation": {
         "title": "2. Konsultacija",
-        "content": "AI asistent pruža početnu konsultaciju i prikuplja informacije o projektu. Konačnu procjenu i ponudu daje menadžer kompanije."
+        "content": "Početna konsultacija ima informativni karakter. Konačnu procjenu i ponudu šaljemo u pisanom obliku."
       },
       "userObligations": {
         "title": "3. Obaveze korisnika",
@@ -222,69 +169,7 @@
         "title": "8. Kontakt",
         "content": "Za pitanja o uslovima korišćenja kontaktirajte: legal@systema.works"
       }
-    }
-  },
-  "Chat": {
-    "title": "SYSTEMA • konsultacija u chatu",
-    "cta": "Chat",
-    "close": "Zatvori",
-    "start": "Pokreni",
-    "hello": "Zdravo! Opišite zadatak — postaviću par pitanja i pripremiti kratak brif za tim.",
-    "typing": "Pišem...",
-    "placeholder": "Opišite zadatak",
-    "send": "Pošalji",
-    "sessionLoading": "Povezujemo chat...",
-    "startError": "Ne možemo pokrenuti sesiju sada. Pokušajte ponovo.",
-    "replyError": "Nisam uspio obraditi poruku. Pokušajte opet.",
-    "cooldownLabel": "Sledeća poruka biće dostupna za {time}.",
-    "lowCostMode": "Vaš zahtjev je već u obradi. Preostalo pojašnjenja: {count}."
-  },
-  "Admin": {
-    "fields": {
-      "referralSource": "Izvor upita"
     },
-    "filters": {
-      "readinessAll": "Bilo koja spremnost",
-      "readinessReady": "Spremno za handoff",
-      "readinessNotReady": "Nije spremno",
-      "missingSlotAll": "Bilo koji nedostajući slot",
-      "nextSlotAll": "Bilo koji sledeći slot"
-    },
-    "sections": {
-      "technicalSignals": "Tehnički signali klijenta"
-    },
-    "labels": {
-      "firstSeen": "Prva aktivnost",
-      "lastSeen": "Poslednja aktivnost",
-      "lastIp": "Poslednji IP (maskiran)",
-      "lastCountry": "Poslednja država",
-      "lastBrowser": "Poslednji browser",
-      "lastDevice": "Poslednji uređaj",
-      "uniqueIps90d": "Jedinstveni IP (90d)",
-      "uniqueCountries90d": "Jedinstvene države (90d)",
-      "uniqueDevices90d": "Jedinstveni uređaji (90d)",
-      "recentIps": "Nedavni IP",
-      "recentCountries": "Nedavne države",
-      "recentAgents": "Nedavni user-agent",
-      "hits": "Hitovi",
-      "readiness": "Spremnost",
-      "nextSlot": "Sledeći slot",
-      "engineVersion": "Verzija engine-a",
-      "legacyMode": "Legacy mode",
-      "timelineOrBudget": "Rok ili budžet",
-      "scope": "Scope pojašnjenje",
-      "handoff": "Handoff",
-      "mode": "Režim",
-      "safety": "Safety",
-      "chatMode": "Režim chata",
-      "turnMode": "Režim poteza",
-      "questionsCount": "Pitanja u potezu",
-      "fallbackPath": "Fallback putanja",
-      "validatorAdjusted": "Validator adjusted"
-    },
-    "badges": {
-      "ready": "READY",
-      "notReady": "NOT READY"
-    }
+    "back": "Na početnu"
   }
 }

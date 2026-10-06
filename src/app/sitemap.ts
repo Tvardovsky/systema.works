@@ -1,21 +1,19 @@
 import type {MetadataRoute} from 'next';
 import {routing} from '@/i18n/routing';
-import {getLanguageAlternates, getLocaleUrl} from '@/lib/seo';
+import {SITE_URL} from '@/lib/seo';
+
+const PAGES = ['', '/privacy', '/terms'] as const;
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const alternates = getLanguageAlternates();
-  const now = new Date();
-
-  return routing.locales.map((locale) => ({
-    url: getLocaleUrl(locale),
-    lastModified: now,
-    changeFrequency: 'weekly',
-    priority: locale === 'en' ? 1 : 0.9,
-    alternates: {
-      languages: alternates
-    }
-  }));
+  return PAGES.flatMap((page) =>
+    routing.locales.map((locale) => ({
+      url: `${SITE_URL}/${locale}${page}`,
+      lastModified: new Date('2026-10-06'),
+      changeFrequency: page === '' ? ('monthly' as const) : ('yearly' as const),
+      priority: page === '' ? (locale === 'en' ? 1 : 0.9) : 0.3,
+      alternates: {
+        languages: Object.fromEntries(routing.locales.map((l) => [l, `${SITE_URL}/${l}${page}`]))
+      }
+    }))
+  );
 }
-
-export const revalidate = 86400;
-export const dynamic = 'force-static';

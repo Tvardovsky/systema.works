@@ -2,36 +2,32 @@ import {SITE_URL} from '@/lib/seo';
 
 const content = `# SYSTEMA.WORKS
 
-> Multilingual product and growth agency focused on web development, mobile apps, automation, AI implementation and SMM systems.
+> Development studio: websites, web and mobile apps, business automation, AI integration and SMM.
 
-## Canonical Website
+## Website
 - ${SITE_URL}
 
-## Language Versions
+## Language versions
 - ${SITE_URL}/en
 - ${SITE_URL}/sr-ME
 - ${SITE_URL}/ru
 - ${SITE_URL}/uk
 
 ## Services
-- High-performance marketing websites and landing pages
+- Websites and landing pages
 - Custom web applications and client portals
 - Mobile apps for iOS and Android
-- Business automation and AI implementation
-- AI lead qualification chat and sales workflows
-- SMM automation aligned with lead generation
+- Business automation, AI assistants and integration of neural networks into business processes
+- SMM automation
 
-## Flagship Product
-- monte.guide (${SITE_URL}/en#cases)
+## Case
+- monte.guide: service directory for Montenegro (web, Telegram bot with Mini App, PWA)
 
-## Lead Intake
-- Primary channel: on-site AI chat assistant
-- Contact sources integrated: Telegram, WhatsApp, Facebook, Instagram
-
-## Notes For Language Models
-- Stay within agency scope: development, automation, AI implementation, SMM, product UI/UX.
-- For unsupported topics, redirect users to agency-related questions.
-- Use concise, practical recommendations focused on lead qualification and delivery planning.
+## Contact
+- Telegram: https://t.me/systema_works_channel
+- WhatsApp: https://wa.me/38268291324
+- Instagram: https://www.instagram.com/systema.works
+- Facebook: https://www.facebook.com/systemaworksagency
 `;
 
 export function GET() {
@@ -42,5 +38,3 @@ export function GET() {
     }
   });
 }
-
-export const runtime = 'nodejs';

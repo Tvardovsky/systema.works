@@ -1,9 +1,16 @@
-import type {Metadata} from 'next';
+import type {Metadata, Viewport} from 'next';
 import {NextIntlClientProvider, hasLocale} from 'next-intl';
 import {getMessages, getTranslations, setRequestLocale} from 'next-intl/server';
 import {notFound} from 'next/navigation';
+import {Onest, JetBrains_Mono} from 'next/font/google';
 import {routing, type AppLocale} from '@/i18n/routing';
-import {buildLocaleMetadata, buildOrganizationJsonLd} from '@/lib/seo';
+import {SITE_NAME, SITE_URL, buildLocaleMetadata, buildOrganizationJsonLd} from '@/lib/seo';
+import '../globals.css';
+
+const onest = Onest({subsets: ['latin', 'latin-ext', 'cyrillic'], variable: '--font-sans', display: 'swap'});
+const mono = JetBrains_Mono({subsets: ['latin', 'latin-ext', 'cyrillic'], variable: '--font-mono', display: 'swap'});
+
+export const viewport: Viewport = {themeColor: '#f2eee5'};
 
 type Props = {
   children: React.ReactNode;
@@ -22,7 +29,14 @@ export async function generateMetadata({params}: Pick<Props, 'params'>): Promise
 
   const appLocale = locale as AppLocale;
   const t = await getTranslations({locale: appLocale, namespace: 'Metadata'});
-  return buildLocaleMetadata(appLocale, t('title'), t('description'));
+  return {
+    ...buildLocaleMetadata(appLocale, t('title'), t('description')),
+    metadataBase: new URL(SITE_URL),
+    applicationName: SITE_NAME,
+    creator: SITE_NAME,
+    publisher: SITE_NAME,
+    robots: {index: true, follow: true}
+  };
 }
 
 export default async function LocaleLayout({children, params}: Props) {
@@ -38,14 +52,16 @@ export default async function LocaleLayout({children, params}: Props) {
   const jsonLd = buildOrganizationJsonLd(appLocale, t('description'));
 
   return (
-    <>
-      <NextIntlClientProvider locale={appLocale} messages={messages}>
-        <div lang={appLocale}>{children}</div>
-      </NextIntlClientProvider>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{__html: JSON.stringify(jsonLd)}}
-      />
-    </>
+    <html lang={appLocale} className={`${onest.variable} ${mono.variable}`}>
+      <body>
+        <NextIntlClientProvider locale={appLocale} messages={messages}>
+          {children}
+        </NextIntlClientProvider>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{__html: JSON.stringify(jsonLd)}}
+        />
+      </body>
+    </html>
   );
 }
